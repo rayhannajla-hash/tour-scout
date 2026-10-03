@@ -61,7 +61,7 @@ The `Dockerfile` runs the server as a container (the Qloo harness starts `qloo m
 
 ## Credits
 
-Taste data from [Qloo](https://qloo.com). City coordinates from [GeoNames](https://www.geonames.org) (CC BY 4.0). Map tiles © OpenStreetMap contributors, © CARTO.
+Taste data from [Qloo](https://qloo.com). City coordinates from [GeoNames](https://www.geonames.org) (CC BY 4.0). Map tiles © OpenStreetMap contributors.
 
 ## License
 

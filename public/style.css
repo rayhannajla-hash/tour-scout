@@ -119,9 +119,11 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .map-card { padding: 0; overflow: hidden; }
 #map { height: clamp(300px, 48vh, 520px); background: var(--surface-2); }
 .legend { display: flex; gap: 0.5rem; align-items: center; padding: 0.5rem 0.9rem; font-size: 0.8rem; color: var(--muted); flex-wrap: wrap; }
-.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
+.legend span.item { display: inline-flex; align-items: center; gap: 0.35rem; }
 .dot.fan { background: var(--fan); opacity: 0.7; }
-.dot.stop { background: var(--accent); margin-left: 0.6rem; }
+.dot.stop { background: var(--accent); }
+.legend { column-gap: 1rem; }
 .stop-pin {
   background: var(--accent); color: var(--accent-ink); border-radius: 50%; width: 26px; height: 26px; display: grid; place-items: center;
   font: 700 0.8rem Inter, sans-serif; border: 2px solid var(--surface);
@@ -159,3 +161,7 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .error { color: var(--bad); }
 .foot { padding: 0 clamp(1rem, 3vw, 2rem) 1.5rem; color: var(--muted); font-size: 0.78rem; }
 .leaflet-container { font: inherit; }
+.leaflet-tile-pane { filter: grayscale(0.85) contrast(0.9) brightness(1.05); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .leaflet-tile-pane { filter: grayscale(1) invert(1) brightness(0.85) contrast(0.9); }
+}

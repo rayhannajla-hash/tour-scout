@@ -34,10 +34,10 @@ function inputSummary(tool, input) {
 }
 
 // ---------- map ----------
-const dark = matchMedia("(prefers-color-scheme: dark)").matches;
 const map = L.map("map", { scrollWheelZoom: false, worldCopyJump: true }).setView([39, -96], 4);
-L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`, {
-  attribution: "© OpenStreetMap contributors © CARTO", maxZoom: 12, subdomains: "abcd",
+// Standard OSM tiles (no key); style.css mutes them and inverts them in dark mode.
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors', maxZoom: 12,
 }).addTo(map);
 const fanLayer = L.layerGroup().addTo(map);
 const routeLayer = L.layerGroup().addTo(map);
