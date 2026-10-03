@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tour Scout</title>
+  <meta name="description" content="An agent that routes tours for independent artists using Qloo's taste graph.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%23ff6b3d'/%3E%3Cpath d='M9 20 L14 12 L18 17 L23 10' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div>
+        <h1>Tour Scout</h1>
+        <p class="tagline">Route the tour where the fans already are.</p>
+      </div>
+    </div>
+    <div class="modes" id="modes" aria-live="polite"></div>
+  </header>
+
+  <div class="banner" id="sample-banner" hidden>
+    Sample mode: Qloo results are generated locally until the event API key is configured. Every sample result is labelled.
+  </div>
+
+  <main class="layout">
+    <section class="col col-left">
+      <form id="scout" class="card form" autocomplete="off">
+        <label>
+          <span>Artist or comedian</span>
+          <input name="artist" required maxlength="80" placeholder="e.g. Phoebe Bridgers">
+        </label>
+        <label>
+          <span>Region</span>
+          <input name="within" list="regions" maxlength="60" value="United States">
+          <datalist id="regions">
+            <option value="United States"><option value="United Kingdom"><option value="Europe">
+            <option value="Canada"><option value="Australia"><option value="Indonesia"><option value="Texas"><option value="California">
+          </datalist>
+        </label>
+        <label class="stops">
+          <span>Stops <output id="stops-out">5</output></span>
+          <input name="stops" type="range" min="3" max="8" value="5">
+        </label>
+        <label>
+          <span>Notes <em>(optional)</em></span>
+          <textarea name="notes" rows="2" maxlength="300" placeholder="Start in Chicago, avoid New York, weekends only…"></textarea>
+        </label>
+        <button type="submit" id="go">Scout the tour</button>
+      </form>
+
+      <section class="card activity" aria-labelledby="activity-h">
+        <h2 id="activity-h">Agent activity</h2>
+        <ol id="steps" class="steps"><li class="empty">The agent's tool calls will show up here.</li></ol>
+      </section>
+
+      <section class="card evidence" aria-labelledby="evidence-h">
+        <h2 id="evidence-h">Evidence <span class="count" id="ev-count"></span></h2>
+        <p class="hint">Every Qloo call the agent made. Plan stops cite these IDs.</p>
+        <ol id="evidence" class="ev-list"></ol>
+      </section>
+    </section>
+
+    <section class="col col-right">
+      <div class="card map-card">
+        <div id="map" role="img" aria-label="Map of fan cities and the planned route"></div>
+        <div class="legend"><span class="dot fan"></span> fan city (size = affinity) <span class="dot stop"></span> tour stop</div>
+      </div>
+
+      <section id="plan" class="card plan" hidden>
+        <div class="plan-head">
+          <h2 id="plan-title"></h2>
+          <button type="button" class="ghost" id="copy">Copy plan</button>
+        </div>
+        <p id="plan-summary" class="summary"></p>
+        <ol id="stops-list" class="stop-list"></ol>
+        <div class="grid2">
+          <div>
+            <h3>Momentum</h3>
+            <div id="trends" class="trends"></div>
+          </div>
+          <div>
+            <h3>Marketing angle</h3>
+            <p id="angle"></p>
+          </div>
+        </div>
+        <div class="caveats">
+          <h3>What this plan does not establish</h3>
+          <ul id="caveats"></ul>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <footer class="foot">
+    Built for the Qloo Agentic Hackathon. Taste data: Qloo. City data: GeoNames (CC BY 4.0). Map tiles: © OpenStreetMap contributors, © CARTO.
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
