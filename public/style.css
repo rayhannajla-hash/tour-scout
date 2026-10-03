@@ -122,7 +122,7 @@ button.ghost { background: transparent; color: var(--text); border: 1px solid va
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; }
 .legend span.item { display: inline-flex; align-items: center; gap: 0.35rem; }
 .dot.fan { background: var(--fan); opacity: 0.7; }
-.dot.stop { background: var(--accent); }
+.dot.tour { background: var(--accent); }
 .legend { column-gap: 1rem; }
 .stop-pin {
   background: var(--accent); color: var(--accent-ink); border-radius: 50%; width: 26px; height: 26px; display: grid; place-items: center;
