@@ -10,7 +10,9 @@ const CLAUDE_EFFORT = process.env.CLAUDE_EFFORT || "medium";
 // Tried in order; a model that is unavailable or out of free quota falls through to the next.
 const GEMINI_MODELS = (process.env.GEMINI_MODEL || "gemini-3.8-flash,gemini-3.5-flash,gemini-3.5-flash-lite")
   .split(",").map((m) => m.trim()).filter(Boolean);
-const MAX_TURNS = 16;
+const MAX_TURNS = 20;
+const NUDGE_AT = MAX_TURNS - 4;
+const BUDGET_NUDGE = "Step budget nearly used. Stop exploring: run plan_route if the route is not final, then call submit_tour_plan with what you have and note any gaps in caveats.";
 
 export const agentMode = process.env.LLM_PROVIDER
   || (process.env.GEMINI_API_KEY ? "gemini" : process.env.ANTHROPIC_API_KEY ? "claude" : "scripted");
@@ -25,12 +27,12 @@ How to work:
 - Choose stops that balance audience affinity against routing: avoid two stops within roughly 150 km of each other unless the user asks for it, and prefer a route a van can drive.
 - Get opener candidates once, then rank them per city so each stop gets the opener its local audience is most likely to share. Prefer openers smaller than the headliner.
 - Check momentum for the headliner and the openers you pick, and take an audience snapshot for the marketing angle.
-- Order the stops with plan_route, then call submit_tour_plan exactly once.
+- Calls that do not depend on each other (ranking openers for every stop, momentum, the audience snapshot) go out together in one turn.
+- Decide the stops yourself from the fan-city evidence, then call plan_route once (a second time only if you change the stop list), then call submit_tour_plan exactly once.
 
 Ground rules:
 - Cite evidence IDs (E1, E2, ...) for every stop. Never invent numbers, venues, ticket counts, or dates; affinity is relative interest, not a sales forecast.
 - If a Qloo call errors or comes back empty, adapt (another region, fewer stops) and say what you could not establish in caveats.
-- If any evidence is marked as sample data, say so in the first caveat.
 - Keep the user-facing text plain and specific. Between tool calls, a short sentence about what you are checking is enough.`;
 
 function userBrief({ artist, within, stops, notes }) {
@@ -100,9 +102,12 @@ async function geminiLoop(req, s) {
     const outs = await executeCalls(s, calls.map((c, i) => ({ id: c.id ?? `g${turn}-${i}`, name: c.name, input: c.args ?? {} })));
     contents.push({
       role: "user",
-      parts: calls.map((c, i) => ({
-        functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: outs[i]?.status === "error" ? { error: outs[i] } : { output: outs[i] } },
-      })),
+      parts: [
+        ...calls.map((c, i) => ({
+          functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: outs[i]?.status === "error" ? { error: outs[i] } : { output: outs[i] } },
+        })),
+        ...(turn === NUDGE_AT && !s.plan ? [{ text: BUDGET_NUDGE }] : []),
+      ],
     });
     if (s.plan) break;
   }
@@ -147,9 +152,12 @@ async function claudeLoop(req, s) {
     const outs = await executeCalls(s, toolUses.map((tu) => ({ id: tu.id, name: tu.name, input: tu.input })));
     messages.push({
       role: "user",
-      content: toolUses.map((tu, i) => ({
-        type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(outs[i]), ...(outs[i]?.status === "error" ? { is_error: true } : {}),
-      })),
+      content: [
+        ...toolUses.map((tu, i) => ({
+          type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(outs[i]), ...(outs[i]?.status === "error" ? { is_error: true } : {}),
+        })),
+        ...(turn === NUDGE_AT && !s.plan ? [{ type: "text", text: BUDGET_NUDGE }] : []),
+      ],
     });
     if (s.plan) break; // plan accepted; no need to pay for a closing remark
   }

@@ -61,7 +61,8 @@ export const TOOLS = [
       if (problem) return problem;
       const top = Array.isArray(env.results) ? env.results[0] : env.results;
       s.headliner = { name: nameOf(top) ?? name, id: idOf(top), popularity: round(top?.popularity) };
-      return { evidence: ref, artist: s.headliner, description: top?.description ?? null };
+      return { evidence: ref, artist: { name: s.headliner.name, popularity: s.headliner.popularity },
+        description: top?.description ?? null, note: "Use this exact name in later tool calls." };
     },
   },
   {
@@ -196,6 +197,8 @@ export const TOOLS = [
     },
     validate: (i) => strArr(i.cities, 2, 12),
     async run(s, { cities, start_city, end_city }) {
+      s.routeCalls = (s.routeCalls ?? 0) + 1;
+      if (s.routeCalls > 3) return { status: "error", error: "ROUTE_LIMIT", recovery: "The route has been planned three times. Keep the last route and call submit_tour_plan." };
       const resolved = [];
       const unknown = [];
       for (const name of cities) {
@@ -247,8 +250,13 @@ export const TOOLS = [
       const bad = plan.stops.flatMap((st) => st.evidence.filter((e) => !known.has(e)));
       if (bad.length) return { status: "error", unknown_evidence: bad, recovery: "Cite only evidence IDs returned by earlier tools." };
       const coords = new Map((s.route ?? []).map((c) => [c.city, c]));
+      // The sample-data warning is the app's job, not the model's: always first, always exact.
+      const caveats = s.evidence.some((e) => e.sample)
+        ? ["This plan used SAMPLE DATA generated locally, not live Qloo results.", ...plan.caveats.filter((c) => !/sample/i.test(c))]
+        : plan.caveats;
       s.plan = {
         ...plan,
+        caveats,
         stops: plan.stops.map((st) => ({ ...st, lat: coords.get(st.city)?.lat ?? null, lon: coords.get(st.city)?.lon ?? null })),
       };
       s.emit("plan", s.plan);
