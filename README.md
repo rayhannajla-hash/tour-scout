@@ -10,7 +10,7 @@ A general-purpose model asked "where should this artist tour?" answers from fame
 
 ## How it works
 
-The agent (Claude, via tool use) plans with eight tools. Six of them wrap Qloo workflows from the official harness (`qloo mcp`); each Qloo call is recorded as numbered evidence (E1, E2, ...).
+The agent (Gemini or Claude, via function calling) plans with eight tools. Six of them wrap Qloo workflows from the official harness (`qloo mcp`); each Qloo call is recorded as numbered evidence (E1, E2, ...).
 
 | Agent tool | Qloo workflow | What it adds |
 | --- | --- | --- |
@@ -38,9 +38,10 @@ npm start              # http://localhost:8787
 | Variable | Purpose |
 | --- | --- |
 | `QLOO_API_KEY` | Event-issued Qloo key. Without it the app runs on clearly labelled sample data. |
-| `ANTHROPIC_API_KEY` | Claude key for the agent. Without it a fixed playbook runs over the same tools. |
-| `CLAUDE_MODEL` | Defaults to `claude-opus-5`. |
-| `CLAUDE_EFFORT` | `low`, `medium` (default), `high`. |
+| `GEMINI_API_KEY` | Gemini key for the agent (free tier works). |
+| `GEMINI_MODEL` | Comma-separated fallback list; a model that is unavailable or out of quota falls through to the next. |
+| `ANTHROPIC_API_KEY` | Use Claude as the agent instead (`CLAUDE_MODEL`, default `claude-opus-5`; `CLAUDE_EFFORT`, default `medium`). |
+| (none) | Without a model key, a fixed playbook runs over the same tools so the app stays demoable. |
 | `RUNS_PER_HOUR`, `MAX_CONCURRENT` | Demo protection for the shared Qloo quota. Identical requests are cached for six hours. |
 
 Keys stay on the server. The browser only talks to `/api/plan` and `/api/health`.
@@ -49,7 +50,7 @@ Shareable links prefill and run a plan: `/?artist=Phoebe%20Bridgers&within=Unite
 
 ## Deploy
 
-The `Dockerfile` runs the server as a container (the Qloo harness starts `qloo mcp` as a child process, so serverless functions are not supported). Set `QLOO_API_KEY` and `ANTHROPIC_API_KEY` as secrets on the host.
+The `Dockerfile` runs the server as a container (the Qloo harness starts `qloo mcp` as a child process, so serverless functions are not supported). Set `QLOO_API_KEY` and `GEMINI_API_KEY` (or `ANTHROPIC_API_KEY`) as secrets on the host.
 
 ## What a plan does not establish
 

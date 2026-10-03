@@ -127,12 +127,12 @@ async function serveStatic(req, res) {
 const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/api/plan") return handlePlan(req, res);
   if (req.method === "GET" && req.url === "/api/health") {
-    return json(res, 200, { qloo: qlooMode, agent: agentMode, model: agentMode === "claude" ? MODEL : null, cities: CITY_SOURCE });
+    return json(res, 200, { qloo: qlooMode, agent: agentMode, model: MODEL, cities: CITY_SOURCE });
   }
   if (req.method === "GET") return serveStatic(req, res);
   json(res, 405, { error: "method not allowed" });
 });
 
 server.listen(PORT, () => {
-  console.log(`Tour Scout on http://localhost:${PORT} (qloo: ${qlooMode}, agent: ${agentMode}${agentMode === "claude" ? `, model: ${MODEL}` : ""})`);
+  console.log(`Tour Scout on http://localhost:${PORT} (qloo: ${qlooMode}, agent: ${agentMode}${MODEL ? `, model: ${MODEL}` : ""})`);
 });

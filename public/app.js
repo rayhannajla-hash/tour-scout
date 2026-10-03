@@ -187,7 +187,7 @@ function planAsText() {
 
 // ---------- streaming ----------
 const handlers = {
-  start: (d) => addNote(d.mode === "claude" ? `Agent: ${d.model}` : "Agent: scripted playbook (no language model key configured)"),
+  start: (d) => addNote(d.model ? `Agent: ${d.model}` : "Agent: scripted playbook (no language model key configured)"),
   cached: (d) => addNote(`Loaded a cached plan from ${new Date(d.at).toLocaleString()}.`),
   note: (d) => addNote(d.text),
   step: addStep,
@@ -266,6 +266,6 @@ if (params.get("artist")) {
 fetch("/api/health").then((r) => r.json()).then((h) => {
   $("#modes").replaceChildren(
     el("span", { class: `badge ${h.qloo === "live" ? "live" : "sample"}` }, h.qloo === "live" ? "Qloo: live" : "Qloo: sample data"),
-    el("span", { class: "badge" }, h.agent === "claude" ? `Agent: ${h.model}` : "Agent: scripted"));
+    el("span", { class: "badge" }, h.model ? `Agent: ${h.model}` : "Agent: scripted"));
   $("#sample-banner").hidden = h.qloo === "live";
 }).catch(() => {});

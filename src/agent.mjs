@@ -1,13 +1,20 @@
-// The planning agent. With ANTHROPIC_API_KEY it is a Claude tool-use loop; without one it
-// runs a fixed playbook over the same tools so the app stays demoable offline.
+// The planning agent: a tool-use loop on Gemini (GEMINI_API_KEY) or Claude (ANTHROPIC_API_KEY).
+// With neither key it runs a fixed playbook over the same tools so the app stays demoable.
 import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI, ApiError } from "@google/genai";
 import { Session, TOOL_DEFS, runTool } from "./tools.mjs";
 import { distanceKm } from "./geo.mjs";
 
-export const MODEL = process.env.CLAUDE_MODEL || "claude-opus-5";
-const EFFORT = process.env.CLAUDE_EFFORT || "medium";
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-opus-5";
+const CLAUDE_EFFORT = process.env.CLAUDE_EFFORT || "medium";
+// Tried in order; a model that is unavailable or out of free quota falls through to the next.
+const GEMINI_MODELS = (process.env.GEMINI_MODEL || "gemini-3.8-flash,gemini-3.5-flash,gemini-3.5-flash-lite")
+  .split(",").map((m) => m.trim()).filter(Boolean);
 const MAX_TURNS = 16;
-export const agentMode = process.env.ANTHROPIC_API_KEY ? "claude" : "scripted";
+
+export const agentMode = process.env.LLM_PROVIDER
+  || (process.env.GEMINI_API_KEY ? "gemini" : process.env.ANTHROPIC_API_KEY ? "claude" : "scripted");
+export const MODEL = agentMode === "gemini" ? GEMINI_MODELS[0] : agentMode === "claude" ? CLAUDE_MODEL : null;
 
 const SYSTEM = `You are Tour Scout, a tour-routing agent for independent musicians and comedians and the managers who book them.
 
@@ -33,6 +40,75 @@ function userBrief({ artist, within, stops, notes }) {
   ].filter(Boolean).join("\n");
 }
 
+async function executeCalls(s, calls) {
+  return Promise.all(calls.map(async ({ id, name, input }) => {
+    s.emit("step", { id, tool: name, input });
+    const out = await runTool(s, name, input);
+    s.emit("step_done", { id, ok: out?.status !== "error" });
+    return out;
+  }));
+}
+
+let geminiClient = null;
+let geminiModelIdx = 0; // sticks to the first model that worked
+
+async function geminiGenerate(contents) {
+  geminiClient ??= new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const config = {
+    systemInstruction: SYSTEM,
+    tools: [{ functionDeclarations: TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.input_schema })) }],
+  };
+  for (let i = geminiModelIdx; i < GEMINI_MODELS.length; i++) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await geminiClient.models.generateContent({ model: GEMINI_MODELS[i], contents, config });
+        geminiModelIdx = i;
+        return { response, model: GEMINI_MODELS[i] };
+      } catch (err) {
+        if (!(err instanceof ApiError)) throw err;
+        if (err.status === 503 && attempt === 0) { await new Promise((r) => setTimeout(r, 2000)); continue; }
+        if (err.status === 404 || err.status === 429 || err.status === 503) break; // try the next model
+        console.error("gemini error:", err);
+        throw new Error(err.status === 400 || err.status === 401 || err.status === 403
+          ? "The language model rejected the server's API key." : `Language model request failed (${err.status}).`);
+      }
+    }
+  }
+  throw new Error("All configured Gemini models are unavailable or out of free quota right now.");
+}
+
+async function geminiLoop(req, s) {
+  const contents = [{ role: "user", parts: [{ text: userBrief(req) }] }];
+  const usage = { input_tokens: 0, output_tokens: 0, models: new Set() };
+
+  for (let turn = 0; turn < MAX_TURNS; turn++) {
+    const { response, model } = await geminiGenerate(contents);
+    usage.models.add(model);
+    usage.input_tokens += response.usageMetadata?.promptTokenCount ?? 0;
+    usage.output_tokens += response.usageMetadata?.candidatesTokenCount ?? 0;
+
+    const candidate = response.candidates?.[0];
+    if (!candidate?.content) throw new Error(`Gemini returned no content (${candidate?.finishReason ?? "no candidate"}).`);
+    for (const part of candidate.content.parts ?? []) {
+      if (part.text && !part.thought && part.text.trim()) s.emit("note", { text: part.text.trim() });
+    }
+    const calls = response.functionCalls ?? [];
+    if (calls.length === 0) break;
+
+    // Push the model turn back unchanged so Gemini 3 thought signatures are preserved.
+    contents.push(candidate.content);
+    const outs = await executeCalls(s, calls.map((c, i) => ({ id: c.id ?? `g${turn}-${i}`, name: c.name, input: c.args ?? {} })));
+    contents.push({
+      role: "user",
+      parts: calls.map((c, i) => ({
+        functionResponse: { ...(c.id ? { id: c.id } : {}), name: c.name, response: outs[i]?.status === "error" ? { error: outs[i] } : { output: outs[i] } },
+      })),
+    });
+    if (s.plan) break;
+  }
+  return { ...usage, models: [...usage.models] };
+}
+
 async function claudeLoop(req, s) {
   const client = new Anthropic();
   const messages = [{ role: "user", content: userBrief(req) }];
@@ -40,12 +116,12 @@ async function claudeLoop(req, s) {
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     const response = await client.beta.messages.create({
-      model: MODEL,
+      model: CLAUDE_MODEL,
       max_tokens: 16000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       thinking: { type: "adaptive" },
-      output_config: { effort: EFFORT },
+      output_config: { effort: CLAUDE_EFFORT },
       cache_control: { type: "ephemeral" },
       system: SYSTEM,
       tools: TOOL_DEFS,
@@ -68,13 +144,13 @@ async function claudeLoop(req, s) {
     if (response.stop_reason === "end_turn" || toolUses.length === 0) break;
 
     messages.push({ role: "assistant", content: response.content });
-    const results = await Promise.all(toolUses.map(async (tu) => {
-      s.emit("step", { id: tu.id, tool: tu.name, input: tu.input });
-      const out = await runTool(s, tu.name, tu.input);
-      s.emit("step_done", { id: tu.id, ok: out?.status !== "error" });
-      return { type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(out), ...(out?.status === "error" ? { is_error: true } : {}) };
-    }));
-    messages.push({ role: "user", content: results });
+    const outs = await executeCalls(s, toolUses.map((tu) => ({ id: tu.id, name: tu.name, input: tu.input })));
+    messages.push({
+      role: "user",
+      content: toolUses.map((tu, i) => ({
+        type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(outs[i]), ...(outs[i]?.status === "error" ? { is_error: true } : {}),
+      })),
+    });
     if (s.plan) break; // plan accepted; no need to pay for a closing remark
   }
   return usage;
@@ -83,10 +159,7 @@ async function claudeLoop(req, s) {
 // Offline playbook: same tools, fixed order, template wording.
 async function scriptedRun(req, s) {
   const step = async (tool, input) => {
-    const id = `script-${tool}-${Math.random().toString(36).slice(2, 8)}`;
-    s.emit("step", { id, tool, input });
-    const out = await runTool(s, tool, input);
-    s.emit("step_done", { id, ok: out?.status !== "error" });
+    const [out] = await executeCalls(s, [{ id: `script-${tool}-${Math.random().toString(36).slice(2, 8)}`, name: tool, input }]);
     return out;
   };
 
@@ -145,8 +218,9 @@ async function scriptedRun(req, s) {
 
 export async function runAgent(req, emit) {
   const s = new Session(emit);
-  emit("start", { mode: agentMode, model: agentMode === "claude" ? MODEL : null });
-  const usage = agentMode === "claude" ? await claudeLoop(req, s) : await scriptedRun(req, s);
+  emit("start", { mode: agentMode, model: MODEL });
+  const loop = { gemini: geminiLoop, claude: claudeLoop }[agentMode] ?? scriptedRun;
+  const usage = await loop(req, s);
   if (!s.plan) throw new Error("The agent finished without a plan.");
   emit("done", { evidence_count: s.evidence.length, usage });
   return s;
