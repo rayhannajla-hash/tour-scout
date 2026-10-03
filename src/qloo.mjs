@@ -16,7 +16,13 @@ let clientPromise = null;
 async function liveClient() {
   if (!clientPromise) {
     clientPromise = (async () => {
-      const transport = new StdioClientTransport({ command: QLOO_BIN, args: ["mcp"], env: process.env });
+      // Hackathon keys only work against the hackathon API host.
+      const env = {
+        QLOO_BASE_URL: "https://hackathon.api.qloo.com",
+        QLOO_TRUSTED_BASE_URL: "https://hackathon.api.qloo.com",
+        ...process.env,
+      };
+      const transport = new StdioClientTransport({ command: QLOO_BIN, args: ["mcp"], env });
       const client = new Client({ name: "tour-scout", version: "0.1.0" });
       await client.connect(transport);
       transport.onclose = () => { clientPromise = null; };
