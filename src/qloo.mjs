@@ -46,9 +46,36 @@ function parseEnvelope(result) {
   }
 }
 
+// The harness's qloo_where_popular keeps only the top 20 heatmap cells, and for smaller
+// artists those are sparse rural cells where a handful of fans saturates affinity. The
+// Insights API returns the whole heatmap in one response, so the backend asks for it
+// directly (key stays server-side) and geo.mjs averages the cells around each city.
+async function fullHeatmap({ entity_id, within }) {
+  const base = process.env.QLOO_BASE_URL ?? "https://hackathon.api.qloo.com";
+  const query = { "filter.type": "urn:heatmap", "signal.interests.entities": entity_id, "filter.location.query": within };
+  const request = { method: "GET", path: "/v2/insights", query };
+  const fail = (code, summary, retryable = false) => ({ operation: "heatmap", status: "error", summary, results: [], result_count: 0,
+    error: { code, retryable, recovery: summary }, provenance: { requests: [request] } });
+  if (!/^[0-9A-F-]{36}$/i.test(entity_id ?? "")) return fail("NEEDS_ENTITY_ID", "Resolve the artist first; the heatmap needs its Qloo ID.");
+  let res;
+  try {
+    res = await fetch(`${base}/v2/insights?${new URLSearchParams(query)}`, {
+      headers: { "X-Api-Key": process.env.QLOO_API_KEY }, signal: AbortSignal.timeout(30_000),
+    });
+  } catch (err) {
+    return fail("NETWORK", `Qloo heatmap request failed: ${err.message}`, true);
+  }
+  const body = await res.json().catch(() => null);
+  if (!res.ok) return fail(`HTTP_${res.status}`, body?.errors?.[0]?.message ?? `Qloo returned ${res.status}.`, res.status === 429 || res.status >= 500);
+  const results = body?.results?.heatmap ?? [];
+  return { operation: "heatmap", status: results.length ? "ok" : "empty", summary: `${results.length} heatmap cells within ${within}.`,
+    results, result_count: results.length, provenance: { requests: [request] } };
+}
+
 // Every call returns the harness envelope: { status, summary, results, result_count, error?, provenance? }.
 export async function callQloo(tool, args) {
   if (qlooMode === "sample") return mockQloo(tool, args);
+  if (tool === "qloo_heatmap") return fullHeatmap(args);
   const client = await liveClient();
   return parseEnvelope(await client.callTool({ name: tool, arguments: args }));
 }

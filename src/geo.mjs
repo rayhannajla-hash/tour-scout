@@ -48,28 +48,34 @@ export function findCity(name) {
 
 export const cityLabel = (c) => [c.name, c.region || c.country].filter(Boolean).join(", ");
 
-// Heatmap points -> one row per city, keeping the strongest affinity seen in that city.
+// Heatmap cells -> one row per city with the mean affinity of the cells around it.
+// A full heatmap has thousands of cells and single-cell maxima saturate near 1.0, so
+// the mean over the metro is what separates cities; cells far from any city and metros
+// with too few cells to average are dropped.
 export function citiesFromHeatmap(points) {
+  const dense = points.length > 200;
+  const minCells = dense ? 3 : 1;
   const byCity = new Map();
   for (const p of points) {
     const lat = p?.location?.latitude ?? p?.latitude;
     const lon = p?.location?.longitude ?? p?.longitude;
-    if (typeof lat !== "number" || typeof lon !== "number") continue;
-    const city = nearestCity({ lat, lon });
+    const affinity = p?.query?.affinity;
+    if (typeof lat !== "number" || typeof lon !== "number" || typeof affinity !== "number") continue;
+    const city = dense ? nearestCity({ lat, lon }, 40, 40) : nearestCity({ lat, lon });
     if (!city) continue;
     const key = `${city.name}|${city.region}|${city.country}`;
-    const affinity = p?.query?.affinity ?? null;
-    const popularity = p?.query?.popularity ?? null;
     const row = byCity.get(key) ?? {
       city: cityLabel(city), country: city.country, lat: city.lat, lon: city.lon,
-      population: city.population, affinity: null, popularity: null, points: 0,
+      population: city.population, sum: 0, points: 0,
     };
     row.points += 1;
-    if (affinity !== null && (row.affinity === null || affinity > row.affinity)) row.affinity = affinity;
-    if (popularity !== null && (row.popularity === null || popularity > row.popularity)) row.popularity = popularity;
+    row.sum += affinity;
     byCity.set(key, row);
   }
-  return [...byCity.values()].sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0));
+  return [...byCity.values()]
+    .filter((r) => r.points >= minCells)
+    .map(({ sum, ...r }) => ({ ...r, affinity: sum / r.points }))
+    .sort((a, b) => b.affinity - a.affinity);
 }
 
 const legKm = (route) => route.slice(1).reduce((sum, c, i) => sum + distanceKm(route[i], c), 0);

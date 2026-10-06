@@ -33,7 +33,7 @@ const sampleArtists = (seed, n) => {
     entity_id: `sample-${seed.length}-${i}`,
     name: `Sample Artist ${String.fromCharCode(65 + i)}`,
     popularity: Math.round((0.35 + rnd() * 0.5) * 1000) / 1000,
-    query: { affinity: Math.round((0.95 - i * 0.05 - rnd() * 0.03) * 1000) / 1000 },
+    affinity: Math.round((0.95 - i * 0.05 - rnd() * 0.03) * 1000) / 1000,
   }));
 };
 
@@ -45,13 +45,14 @@ export function mockQloo(tool, args) {
         status: "ok",
         summary: `Resolved "${args.entity}" (sample).`,
         results: [{ entity_id: `sample-${args.entity.toLowerCase().replace(/\W+/g, "-")}`, name: args.entity,
-          type: "urn:entity:artist", popularity: Math.round((0.9 + rnd() * 0.09) * 1000) / 1000 }],
+          popularity: Math.round((0.9 + rnd() * 0.09) * 1000) / 1000,
+          properties: { short_description: "Sample artist description." } }],
         result_count: 1,
       });
     }
-    case "qloo_where_popular": {
+    case "qloo_heatmap": {
       const key = Object.keys(TOUR_MARKETS).find((k) => args.within.toLowerCase().includes(k)) ?? "united states";
-      const rnd = seededRandom(`${args.entity}|${key}`);
+      const rnd = seededRandom(`${args.entity_id}|${key}`);
       const points = TOUR_MARKETS[key]
         .map((name) => findCity(name))
         .filter(Boolean)
@@ -59,10 +60,9 @@ export function mockQloo(tool, args) {
           location: { latitude: c.lat + (rnd() - 0.5) * 0.2, longitude: c.lon + (rnd() - 0.5) * 0.2 },
           query: { affinity: Math.round((0.4 + rnd() * 0.6) * 1000) / 1000, popularity: Math.round(rnd() * 1000) / 1000 },
         }))
-        .sort((a, b) => b.query.affinity - a.query.affinity)
-        .slice(0, args.limit ?? 20);
-      return envelope("where_popular", {
-        status: "ok", summary: `Heatmap for ${args.entity} within ${args.within} (sample).`,
+        .sort((a, b) => b.query.affinity - a.query.affinity);
+      return envelope("heatmap", {
+        status: "ok", summary: `Heatmap within ${args.within} (sample).`,
         results: points, result_count: points.length,
       });
     }
@@ -73,36 +73,40 @@ export function mockQloo(tool, args) {
     case "qloo_rank": {
       const rnd = seededRandom(`rank|${args.signal_location}|${args.options.join(",")}`);
       const results = args.options
-        .map((name) => ({ name, query: { affinity: Math.round(rnd() * 1000) / 1000 } }))
-        .sort((a, b) => b.query.affinity - a.query.affinity);
+        // Options arrive as the IDs sampleArtists() handed out; map them back to their names.
+        .map((opt) => {
+          const m = /^sample-\d+-(\d+)$/.exec(opt);
+          return { name: m ? `Sample Artist ${String.fromCharCode(65 + Number(m[1]))}` : opt, affinity: Math.round(rnd() * 1000) / 1000 };
+        })
+        .sort((a, b) => b.affinity - a.affinity);
       return envelope("rank", { status: "ok", summary: `Ranked for ${args.signal_location ?? "global"} (sample).`,
         results, result_count: results.length });
     }
     case "qloo_trends": {
-      const results = args.entities.map((name) => {
+      const series = args.entities.map((name) => {
         const rnd = seededRandom(`trend|${name}`);
         let v = 0.5 + rnd() * 0.2;
         const drift = (rnd() - 0.4) * 0.04;
-        const series = Array.from({ length: 12 }, (_, i) => {
+        const points = Array.from({ length: 12 }, (_, i) => {
           v = Math.min(1, Math.max(0, v + drift + (rnd() - 0.5) * 0.03));
           const d = new Date(args.start_date);
           d.setDate(d.getDate() + i * 14);
           return { date: d.toISOString().slice(0, 10), population_percentile: Math.round(v * 1000) / 1000 };
-        });
-        return { name, series };
+        }).reverse(); // live API lists newest first
+        return { entity: { input: name, name }, points };
       });
-      return envelope("trends", { status: "ok", summary: "Popularity over time (sample).", results, result_count: results.length });
+      return envelope("trends", { status: "ok", summary: "Popularity over time (sample).", series, result_count: series.length });
     }
     case "qloo_audience_demographics":
       return envelope("audience_demographics", {
         status: "ok", summary: "Audience skew (sample).", result_count: 1,
-        results: [{ age: { "24_and_younger": 0.31, "25_to_29": 0.22, "30_to_34": 0.12, "35_and_younger": -0.08, "36_to_55": -0.21, "55_and_older": -0.4 },
-          gender: { male: -0.04, female: 0.05 } }],
+        results: [{ query: { age: { "24_and_younger": 0.31, "25_to_29": 0.22, "30_to_34": 0.12, "35_to_44": -0.08, "45_to_54": -0.21, "55_and_older": -0.4 },
+          gender: { male: -0.04, female: 0.05 } } }],
       });
     case "qloo_entity_tags":
       return envelope("entity_tags", {
         status: "ok", summary: "Characteristic tags (sample).", result_count: 5,
-        results: ["indie", "dream pop", "late-night", "college towns", "vinyl collectors"].map((name, i) => ({ name, query: { affinity: 0.9 - i * 0.1 } })),
+        results: ["indie", "dream pop", "late-night", "college towns", "vinyl collectors"].map((name, i) => ({ name, type: "urn:tag:keyword:music", affinity: 0.9 - i * 0.1 })),
       });
     default:
       return envelope(tool, { status: "error", summary: `No sample for ${tool}.`, results: [], result_count: 0,

@@ -186,7 +186,10 @@ async function scriptedRun(req, s) {
 
   s.emit("note", { text: "Finding acts that share the audience, then ranking them city by city." });
   const openers = await step("find_opener_candidates", { headliner: req.artist, count: 8 });
-  const pool = (openers.candidates ?? []).filter((c) => c.smaller_than_headliner !== false).slice(0, 4).map((c) => c.name);
+  // Smaller acts first; top up with the rest so Qloo has a real choice to rank.
+  const pool = [...(openers.candidates ?? [])]
+    .sort((a, b) => (a.smaller_than_headliner === false) - (b.smaller_than_headliner === false))
+    .slice(0, 4).map((c) => c.name);
   const perCity = new Map();
   if (pool.length >= 2) {
     const ranked = await Promise.all(chosen.map((c) => step("rank_openers_for_city", { headliner: req.artist, candidates: pool, city: c.city })));
@@ -208,7 +211,7 @@ async function scriptedRun(req, s) {
       const c = s.cities.get(city);
       return {
         city,
-        why: `Affinity ${c?.affinity ?? "n/a"} for ${req.artist} in this market.`,
+        why: `Affinity ${typeof c?.affinity === "number" ? c.affinity.toFixed(3) : "n/a"} for ${req.artist} in this market.`,
         opener: top?.name,
         opener_reason: top ? "Highest-ranked shared-audience act for this city." : undefined,
         evidence: [fanRef, r?.evidence].filter(Boolean),

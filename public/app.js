@@ -143,7 +143,8 @@ function renderTrends() {
     box.append(el("div", { class: "trend" },
       el("span", { class: "name", title: t.name ?? "" }, t.name ?? "?"),
       t.series?.length > 1 ? sparkline(t.series) : el("span"),
-      el("span", { class: `delta ${pct > 0 ? "up" : pct < 0 ? "down" : ""}` }, pct === null ? "n/a" : `${pct > 0 ? "+" : ""}${pct} pts`)));
+      el("span", { class: `delta ${pct > 0 ? "up" : pct < 0 ? "down" : ""}` },
+        t.flat ? "flat" : pct === null ? "n/a" : `${pct > 0 ? "+" : ""}${pct} pts`)));
   }
 }
 

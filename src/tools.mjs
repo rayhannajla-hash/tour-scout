@@ -13,8 +13,19 @@ export class Session {
     this.emit = emit;
     this.evidence = [];
     this.cities = new Map(); // label -> city row from find_fan_cities
+    this.ids = new Map(); // lower-cased artist name -> Qloo entity UUID
     this.headliner = null;
     this.plan = null;
+  }
+
+  // Names like "Big Thief" can match both an artist and a person in Qloo; once an
+  // artist is resolved, later calls send its UUID so they never stop on ambiguity.
+  remember(name, id) {
+    if (name && id) this.ids.set(name.toLowerCase(), id);
+  }
+
+  idFor(name) {
+    return this.ids.get(String(name).toLowerCase()) ?? name;
   }
 
   async qloo(tool, args, purpose) {
@@ -61,8 +72,10 @@ export const TOOLS = [
       if (problem) return problem;
       const top = Array.isArray(env.results) ? env.results[0] : env.results;
       s.headliner = { name: nameOf(top) ?? name, id: idOf(top), popularity: round(top?.popularity) };
+      s.remember(name, s.headliner.id);
+      s.remember(s.headliner.name, s.headliner.id);
       return { evidence: ref, artist: { name: s.headliner.name, popularity: s.headliner.popularity },
-        description: top?.description ?? null, note: "Use this exact name in later tool calls." };
+        description: top?.properties?.short_description ?? top?.description ?? null, note: "Use this exact name in later tool calls." };
     },
   },
   {
@@ -78,8 +91,8 @@ export const TOOLS = [
     },
     validate: (i) => str(i.artist, 80) && str(i.within, 60),
     async run(s, { artist, within }) {
-      const { env, ref } = await s.qloo("qloo_where_popular",
-        { entity: artist, entity_type: "artist", within, limit: 20 }, `Where ${artist}'s audience over-indexes in ${within}`);
+      const { env, ref } = await s.qloo("qloo_heatmap",
+        { entity_id: s.idFor(artist), within }, `Where ${artist}'s audience over-indexes in ${within}`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
       const cities = citiesFromHeatmap(env.results ?? []).slice(0, 12);
@@ -87,8 +100,8 @@ export const TOOLS = [
       s.emit("cities", { within, cities, evidence: ref });
       return {
         evidence: ref,
-        note: "affinity is query-relative (0-1): how much more this area over-indexes for the artist than average. It is not a ticket-sales forecast.",
-        cities: cities.map((c) => ({ city: c.city, affinity: round(c.affinity), heatmap_points: c.points, population: c.population })),
+        note: "affinity is query-relative (0-1), averaged over the Qloo heatmap cells around each city: how much more that metro over-indexes for the artist than average. It is not a ticket-sales forecast.",
+        cities: cities.map((c) => ({ city: c.city, affinity: round(c.affinity), heatmap_cells: c.points, population: c.population })),
       };
     },
   },
@@ -103,10 +116,11 @@ export const TOOLS = [
     validate: (i) => str(i.headliner, 80),
     async run(s, { headliner, count = 8 }) {
       const { env, ref } = await s.qloo("qloo_recommend",
-        { target_type: "artist", signals: [headliner], limit: Math.min(12, Math.max(3, count)) }, `Artists that ${headliner}'s fans also like`);
+        { target_type: "artist", signals: [s.idFor(headliner)], limit: Math.min(12, Math.max(3, count)) }, `Artists that ${headliner}'s fans also like`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
       const hp = s.headliner?.popularity;
+      for (const r of env.results ?? []) s.remember(nameOf(r), idOf(r));
       const candidates = (env.results ?? []).map((r) => ({
         name: nameOf(r), affinity: round(affinityOf(r)), popularity: round(r?.popularity),
         smaller_than_headliner: typeof hp === "number" && typeof r?.popularity === "number" ? r.popularity < hp : null,
@@ -129,7 +143,7 @@ export const TOOLS = [
     validate: (i) => str(i.headliner, 80) && strArr(i.candidates, 2, 8) && str(i.city, 80),
     async run(s, { headliner, candidates, city }) {
       const { env, ref } = await s.qloo("qloo_rank",
-        { options: candidates, option_type: "artist", signals: [headliner], signal_location: city }, `Best opener for ${headliner} in ${city}`);
+        { options: candidates.map((c) => s.idFor(c)), option_type: "artist", signals: [s.idFor(headliner)], signal_location: city }, `Best opener for ${headliner} in ${city}`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
       return { evidence: ref, city, ranking: (env.results ?? []).map((r) => ({ name: nameOf(r), affinity: round(affinityOf(r)) })) };
@@ -142,7 +156,7 @@ export const TOOLS = [
       type: "object",
       properties: {
         artists: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 5 },
-        months: { type: "integer", minimum: 2, maximum: 12 },
+        months: { type: "integer", minimum: 6, maximum: 12 },
       },
       required: ["artists"],
     },
@@ -150,21 +164,29 @@ export const TOOLS = [
     async run(s, { artists, months = 6 }) {
       const end = new Date();
       const start = new Date(end);
-      start.setMonth(start.getMonth() - Math.min(12, Math.max(2, months)));
+      // Windows shorter than about six months come back empty from the hackathon API.
+      start.setMonth(start.getMonth() - Math.min(12, Math.max(6, months)));
       const iso = (d) => d.toISOString().slice(0, 10);
       const { env, ref } = await s.qloo("qloo_trends",
-        { entities: artists, entity_type: "artist", start_date: iso(start), end_date: iso(end) }, `Momentum for ${artists.join(", ")}`);
+        { entities: artists.map((a) => s.idFor(a)), entity_type: "artist", start_date: iso(start), end_date: iso(end), limit: 20 }, `Momentum for ${artists.join(", ")}`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
-      const trends = (env.results ?? []).map((r) => {
-        const series = (r.series ?? r.data ?? r.trends ?? [])
-          .map((p) => ({ date: p.date, value: p.population_percentile ?? p.value ?? p.popularity }))
-          .filter((p) => typeof p.value === "number");
+      // One entry per entity; points arrive newest first and are capped by `limit`.
+      const trends = (env.series ?? []).map((r) => {
+        const series = (r.points ?? [])
+          .map((p) => ({ date: p.date, value: p.population_percentile }))
+          .filter((p) => typeof p.value === "number")
+          .sort((a, b) => a.date.localeCompare(b.date));
         const change = series.length > 1 ? round(series.at(-1).value - series[0].value) : null;
-        return { name: nameOf(r) ?? r.entity ?? null, change, series };
+        const flat = series.length > 1 && series.every((p) => p.value === series[0].value);
+        return { name: r.entity?.name ?? r.entity?.input ?? null, change, flat, series };
       });
       s.emit("trends", { trends, evidence: ref });
-      return { evidence: ref, summary: env.summary, trends: trends.map(({ name, change, series }) => ({ name, change, points: series.length })) };
+      const result = { evidence: ref, trends: trends.map(({ name, change, flat, series }) => ({ name, change, flat, points: series.length })) };
+      if (trends.length && trends.every((t) => t.flat || !t.series.length)) {
+        result.note = "Qloo shows no movement for these artists in this window. Do not claim rising or falling momentum; mention it as a caveat instead.";
+      }
+      return result;
     },
   },
   {
@@ -174,12 +196,17 @@ export const TOOLS = [
     validate: (i) => str(i.artist, 80),
     async run(s, { artist }) {
       const [demo, tags] = await Promise.all([
-        s.qloo("qloo_audience_demographics", { entity: artist, entity_type: "artist" }, `Audience skew for ${artist}`),
-        s.qloo("qloo_entity_tags", { entities: [artist], entity_type: "artist", limit: 8 }, `Taste tags for ${artist}`),
+        s.qloo("qloo_audience_demographics", { entity: s.idFor(artist), entity_type: "artist" }, `Audience skew for ${artist}`),
+        s.qloo("qloo_entity_tags", { entities: [s.idFor(artist)], entity_type: "artist", limit: 20 }, `Taste tags for ${artist}`),
       ]);
+      // Tags span every domain; venue amenities (credit cards, dishes, hotel stars) say nothing about the audience.
+      const tasteTags = (tags.env.results ?? [])
+        .filter((t) => !/:(place|brand)$/.test(t.type ?? ""))
+        .map(nameOf).filter(Boolean).slice(0, 8);
       return {
-        demographics: qlooProblem(demo.env, demo.ref) ?? { evidence: demo.ref, results: demo.env.results },
-        tags: qlooProblem(tags.env, tags.ref) ?? { evidence: tags.ref, tags: (tags.env.results ?? []).map(nameOf).filter(Boolean) },
+        demographics: qlooProblem(demo.env, demo.ref)
+          ?? { evidence: demo.ref, note: "Values are skew vs. the average audience (-1..1), not shares.", skew: demo.env.results?.[0]?.query ?? null },
+        tags: qlooProblem(tags.env, tags.ref) ?? { evidence: tags.ref, tags: tasteTags },
       };
     },
   },
