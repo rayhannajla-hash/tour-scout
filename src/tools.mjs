@@ -112,6 +112,12 @@ export const TOOLS = [
     },
     validate: (i) => str(i.artist, 80) && str(i.within, 60),
     async run(s, { artist, within }) {
+      // The model often asks for fan cities in the same turn it resolves the act; resolve
+      // here rather than fail the heatmap call (a red NEEDS_ENTITY_ID in the evidence list).
+      if (!s.ids.has(artist.toLowerCase())) {
+        const resolved = await TOOL_BY_NAME.get("resolve_artist").run(s, { name: artist });
+        if (resolved.status) return resolved;
+      }
       const { env, ref } = await s.qloo("qloo_heatmap",
         { entity_id: s.idFor(artist), within }, `Where ${artist}'s audience over-indexes in ${within}`);
       const problem = qlooProblem(env, ref);
