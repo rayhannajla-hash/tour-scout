@@ -5,6 +5,7 @@
 import { geminiGenerate } from "./agent.mjs";
 import { callQloo } from "./qloo.mjs";
 import { citiesFromHeatmap, findCity, cityLabel, distanceKm } from "./geo.mjs";
+import { ACTS } from "./tools.mjs";
 
 const BASELINE_SCHEMA = {
   type: "object",
@@ -16,7 +17,7 @@ const BASELINE_SCHEMA = {
         properties: {
           city: { type: "string", description: "City and full state or country name, e.g. 'Austin, Texas'." },
           why: { type: "string", description: "One sentence." },
-          opener: { type: "string", description: "One opening act for this stop." },
+          opener: { type: "string", description: "One opener for this stop." },
         },
         required: ["city", "why", "opener"],
       },
@@ -25,9 +26,9 @@ const BASELINE_SCHEMA = {
   required: ["stops"],
 };
 
-async function askGenericLlm({ artist, within, stops, notes }) {
+async function askGenericLlm({ artist, within, stops, notes, act }) {
   const prompt = [
-    `Plan a ${stops}-stop tour for ${artist} in ${within}. Choose the cities where ${artist}'s audience is strongest, keep the route drivable, and suggest one opening act per stop.`,
+    `Plan a ${stops}-stop tour for ${artist} (${act.noun}) in ${within}. Choose the cities where ${artist}'s audience is strongest, keep the route drivable, and suggest one ${act.opener} per stop.`,
     notes ? `Notes from the user: ${notes}` : null,
   ].filter(Boolean).join("\n");
   const { response, model } = await geminiGenerate(
@@ -72,7 +73,8 @@ function placeCity(name, ranking) {
 
 const idOf = (env) => (env.status === "ok" ? env.results?.[0]?.entity_id ?? null : null);
 
-export async function compareWithGenericLlm({ artist, within, stops, notes, scout }) {
+export async function compareWithGenericLlm({ artist, within, stops, notes, scout, act: actKey }) {
+  const act = ACTS[actKey] ?? ACTS.musician;
   const calls = [];
   const qloo = async (tool, args) => {
     const env = await callQloo(tool, args);
@@ -82,12 +84,13 @@ export async function compareWithGenericLlm({ artist, within, stops, notes, scou
   };
 
   const [baseline, head] = await Promise.all([
-    askGenericLlm({ artist, within, stops, notes }),
-    qloo("qloo_describe", { entity: artist, type: "artist" }),
+    askGenericLlm({ artist, within, stops, notes, act }),
+    qloo("qloo_describe", { entity: artist, type: act.type }),
   ]);
   const headliner = head.results?.[0];
   const headId = idOf(head);
   if (!headId) throw new Error(`Qloo could not resolve "${artist}".`);
+  if (typeof headliner?.popularity !== "number") throw new Error(`Qloo has no audience data for ${artist} yet.`);
 
   const heat = await qloo("qloo_heatmap", { entity_id: headId, within });
   if (heat.status !== "ok") throw new Error(`No Qloo heatmap for ${artist} in ${within}.`);
@@ -106,7 +109,7 @@ export async function compareWithGenericLlm({ artist, within, stops, notes, scou
   baseline.stops.forEach((s) => addOpener(s.opener, "llm"));
   scout.forEach((s) => addOpener(s.opener, "scout"));
   const openers = [...named.values()].slice(0, 10);
-  const resolved = await Promise.all(openers.map((o) => qloo("qloo_describe", { entity: o.name, type: "artist" })));
+  const resolved = await Promise.all(openers.map((o) => qloo("qloo_describe", { entity: o.name, type: act.type })));
   openers.forEach((o, i) => {
     o.id = idOf(resolved[i]);
     o.popularity = resolved[i].results?.[0]?.popularity ?? null;
@@ -114,7 +117,7 @@ export async function compareWithGenericLlm({ artist, within, stops, notes, scou
   const ids = openers.filter((o) => o.id).map((o) => o.id);
   const affinityById = new Map();
   if (ids.length) {
-    const ranked = await qloo("qloo_rank", { options: ids, option_type: "artist", signals: [headId] });
+    const ranked = await qloo("qloo_rank", { options: ids, option_type: act.type, signals: [headId] });
     for (const r of ranked.status === "ok" ? ranked.results ?? [] : []) affinityById.set(r.entity_id, r.affinity ?? r.query?.affinity ?? null);
   }
 

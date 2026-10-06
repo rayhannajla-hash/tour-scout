@@ -55,8 +55,9 @@ function parsePlanRequest(body) {
   const within = clean(j.within, 60) || "United States";
   const stops = Math.min(8, Math.max(3, Number.parseInt(j.stops, 10) || 5));
   const notes = clean(j.notes, 300);
+  const act = j.act === "comedian" ? "comedian" : "musician";
   if (!artist) throw new Error("artist is required");
-  return { artist, within, stops, notes };
+  return { artist, within, stops, notes, act };
 }
 
 function json(res, status, obj) {
@@ -75,7 +76,7 @@ async function handlePlan(req, res) {
   res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache", connection: "keep-alive" });
   const send = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
 
-  const key = JSON.stringify([plan.artist.toLowerCase(), plan.within.toLowerCase(), plan.stops, plan.notes.toLowerCase()]);
+  const key = JSON.stringify([plan.act, plan.artist.toLowerCase(), plan.within.toLowerCase(), plan.stops, plan.notes.toLowerCase()]);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) {
     send("cached", { at: new Date(hit.at).toISOString() });
@@ -131,7 +132,7 @@ async function handleCompare(req, res) {
   } catch (err) {
     return json(res, 400, { error: String(err.message) });
   }
-  const key = JSON.stringify([body.artist.toLowerCase(), body.within.toLowerCase(), body.stops, body.scout]);
+  const key = JSON.stringify([body.act, body.artist.toLowerCase(), body.within.toLowerCase(), body.stops, body.notes.toLowerCase(), body.scout]);
   const hit = compareCache.get(key);
   if (hit && Date.now() - hit.at < CACHE_MS) return json(res, 200, { ...hit.result, cached_at: new Date(hit.at).toISOString() });
   if (running >= MAX_CONCURRENT) return json(res, 503, { error: "Tour Scout is busy. Try again in a minute." });

@@ -31,6 +31,13 @@
   <main class="layout">
     <section class="col col-left">
       <form id="scout" class="card form" autocomplete="off">
+        <div class="field">
+          <span id="act-label">Act</span>
+          <div class="seg" role="radiogroup" aria-labelledby="act-label">
+            <label><input type="radio" name="act" value="musician" checked><span>Musician</span></label>
+            <label><input type="radio" name="act" value="comedian"><span>Stand-up comedian</span></label>
+          </div>
+        </div>
         <label>
           <span>Artist or comedian</span>
           <input name="artist" required maxlength="80" placeholder="e.g. Lomelda">

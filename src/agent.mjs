@@ -2,7 +2,7 @@
 // With neither key it runs a fixed playbook over the same tools so the app stays demoable.
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI, ApiError } from "@google/genai";
-import { Session, TOOL_DEFS, runTool } from "./tools.mjs";
+import { Session, TOOL_DEFS, runTool, ACTS } from "./tools.mjs";
 import { distanceKm } from "./geo.mjs";
 
 const CLAUDE_MODEL = process.env.CLAUDE_MODEL || "claude-opus-5";
@@ -30,14 +30,17 @@ How to work:
 - Calls that do not depend on each other (ranking openers for every stop, momentum, the audience snapshot) go out together in one turn.
 - Decide the stops yourself from the fan-city evidence, then call plan_route once (a second time only if you change the stop list), then call submit_tour_plan exactly once.
 
+Comedians:
+- The brief says whether the headliner is a musician or a stand-up comedian. The tools already query the matching kind of Qloo entity. For a comedian, the opener is an opening comic, and the same comic usually opens the whole run.
+
 Ground rules:
 - Cite evidence IDs (E1, E2, ...) for every stop. Never invent numbers, venues, ticket counts, or dates; affinity is relative interest, not a sales forecast.
 - If a Qloo call errors or comes back empty, adapt (another region, fewer stops) and say what you could not establish in caveats.
 - Keep the user-facing text plain and specific. Between tool calls, a short sentence about what you are checking is enough.`;
 
-function userBrief({ artist, within, stops, notes }) {
+function userBrief({ artist, within, stops, notes, act }) {
   return [
-    `Plan a ${stops}-stop tour for ${artist} in ${within}.`,
+    `Plan a ${stops}-stop tour for ${artist} (${(ACTS[act] ?? ACTS.musician).noun}) in ${within}.`,
     notes ? `Notes from the user: ${notes}` : null,
   ].filter(Boolean).join("\n");
 }
@@ -175,7 +178,9 @@ async function scriptedRun(req, s) {
 
   s.emit("note", { text: `Resolving ${req.artist} and mapping where the audience over-indexes in ${req.within}.` });
   const artist = await step("resolve_artist", { name: req.artist });
-  if (artist.status) throw new Error(`Could not resolve the artist (${artist.status}).`);
+  if (artist.status) throw new Error(artist.error === "NO_AUDIENCE_DATA"
+    ? `Qloo has no audience data for ${req.artist} yet, so Tour Scout cannot plan this tour.`
+    : `Could not resolve ${req.artist} (${artist.status}).`);
   const fans = await step("find_fan_cities", { artist: req.artist, within: req.within });
   if (!fans.cities?.length) throw new Error("No fan-city evidence came back for that region.");
 
@@ -232,10 +237,15 @@ async function scriptedRun(req, s) {
 export async function runAgent(req, emit) {
   const s = new Session(emit);
   s.region = req.within;
+  s.act = ACTS[req.act] ?? ACTS.musician;
   emit("start", { mode: agentMode, model: MODEL });
   const loop = { gemini: geminiLoop, claude: claudeLoop }[agentMode] ?? scriptedRun;
   const usage = await loop(req, s);
-  if (!s.plan) throw new Error("The agent finished without a plan.");
+  if (!s.plan) {
+    throw new Error(s.noAudienceData
+      ? `Qloo has no audience data for ${req.artist} yet, so Tour Scout cannot plan this tour.`
+      : "The agent finished without a plan.");
+  }
   emit("done", { evidence_count: s.evidence.length, usage });
   return s;
 }

@@ -8,6 +8,15 @@ const idOf = (r) => r?.entity_id ?? r?.id ?? r?.entity?.entity_id ?? null;
 const affinityOf = (r) => r?.query?.affinity ?? r?.affinity ?? r?.score ?? null;
 const round = (x) => (typeof x === "number" ? Math.round(x * 1000) / 1000 : x ?? null);
 
+// Qloo models musicians as artist entities and comedians as person entities. Comedian
+// openers come from the person graph narrowed to Qloo's comedian genre tag, which
+// otherwise mixes in actors and online creators.
+export const ACTS = {
+  musician: { key: "musician", type: "artist", noun: "musician", opener: "opening act", openerFilter: {} },
+  comedian: { key: "comedian", type: "person", noun: "stand-up comedian", opener: "opening comic",
+    openerFilter: { include_tags: ["urn:tag:genre:person:comedian"] } },
+};
+
 export class Session {
   constructor(emit) {
     this.emit = emit;
@@ -19,6 +28,7 @@ export class Session {
     this.plan = null;
     this.region = null; // the region the user asked for; its fan-city search is the main ranking
     this.mainSearch = null; // { within, cities } ranked best first
+    this.act = ACTS.musician;
   }
 
   // Names like "Big Thief" can match both an artist and a person in Qloo; once an
@@ -70,10 +80,18 @@ export const TOOLS = [
     input_schema: { type: "object", properties: { name: { type: "string", description: "Artist name as the user wrote it." } }, required: ["name"] },
     validate: (i) => str(i.name, 80),
     async run(s, { name }) {
-      const { env, ref } = await s.qloo("qloo_describe", { entity: name, type: "artist" }, `Resolve "${name}"`);
+      const { env, ref } = await s.qloo("qloo_describe", { entity: name, type: s.act.type }, `Resolve "${name}"`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
       const top = Array.isArray(env.results) ? env.results[0] : env.results;
+      // Entities without a popularity score have no audience data behind them: every
+      // later call (heatmap, ranking) fails, so stop here with a plain explanation.
+      if (typeof top?.popularity !== "number") {
+        s.noAudienceData = true;
+        return { evidence: ref, status: "error", error: "NO_AUDIENCE_DATA",
+          found: { name: nameOf(top), description: top?.properties?.short_description ?? null },
+          recovery: `Qloo knows this ${s.act.noun} but holds no audience data for them yet, so no tour can be planned from Qloo. Tell the user plainly and stop; do not call other tools.` };
+      }
       s.headliner = { name: nameOf(top) ?? name, id: idOf(top), popularity: round(top?.popularity) };
       s.remember(name, s.headliner.id);
       s.remember(s.headliner.name, s.headliner.id);
@@ -113,7 +131,7 @@ export const TOOLS = [
   },
   {
     name: "find_opener_candidates",
-    description: "List artists whose audiences overlap with the headliner's, as opening-act candidates. Prefer candidates whose popularity is below the headliner's.",
+    description: "List acts of the headliner's kind (musicians, or comedians for a comedian) whose audiences overlap with the headliner's, as opener candidates. Prefer candidates whose popularity is below the headliner's.",
     input_schema: {
       type: "object",
       properties: { headliner: { type: "string" }, count: { type: "integer", minimum: 3, maximum: 12 } },
@@ -122,7 +140,8 @@ export const TOOLS = [
     validate: (i) => str(i.headliner, 80),
     async run(s, { headliner, count = 8 }) {
       const { env, ref } = await s.qloo("qloo_recommend",
-        { target_type: "artist", signals: [s.idFor(headliner)], limit: Math.min(12, Math.max(3, count)) }, `Artists that ${headliner}'s fans also like`);
+        { target_type: s.act.type, signals: [s.idFor(headliner)], ...s.act.openerFilter, limit: Math.min(12, Math.max(3, count)) },
+        `${s.act.key === "comedian" ? "Comedians" : "Artists"} that ${headliner}'s fans also like`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
       const hp = s.headliner?.popularity;
@@ -139,7 +158,7 @@ export const TOOLS = [
   },
   {
     name: "rank_openers_for_city",
-    description: "Rank opening-act candidates for one specific city, using the headliner as the taste signal and the city as the location signal. Scores are only comparable within one call.",
+    description: "Rank opener candidates for one specific city, using the headliner as the taste signal and the city as the location signal. Scores are only comparable within one call.",
     input_schema: {
       type: "object",
       properties: {
@@ -152,7 +171,7 @@ export const TOOLS = [
     validate: (i) => str(i.headliner, 80) && strArr(i.candidates, 2, 8) && str(i.city, 80),
     async run(s, { headliner, candidates, city }) {
       const { env, ref } = await s.qloo("qloo_rank",
-        { options: candidates.map((c) => s.idFor(c)), option_type: "artist", signals: [s.idFor(headliner)], signal_location: city }, `Best opener for ${headliner} in ${city}`);
+        { options: candidates.map((c) => s.idFor(c)), option_type: s.act.type, signals: [s.idFor(headliner)], signal_location: city }, `Best opener for ${headliner} in ${city}`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
       const hp = s.headliner?.popularity;
@@ -172,7 +191,7 @@ export const TOOLS = [
   },
   {
     name: "check_momentum",
-    description: "Check whether interest in up to five artists is rising or falling over the last few months (Qloo trends).",
+    description: "Check whether interest in up to five acts is rising or falling over the last few months (Qloo trends).",
     input_schema: {
       type: "object",
       properties: {
@@ -189,7 +208,7 @@ export const TOOLS = [
       start.setMonth(start.getMonth() - Math.min(12, Math.max(6, months)));
       const iso = (d) => d.toISOString().slice(0, 10);
       const { env, ref } = await s.qloo("qloo_trends",
-        { entities: artists.map((a) => s.idFor(a)), entity_type: "artist", start_date: iso(start), end_date: iso(end), limit: 20 }, `Momentum for ${artists.join(", ")}`);
+        { entities: artists.map((a) => s.idFor(a)), entity_type: s.act.type, start_date: iso(start), end_date: iso(end), limit: 20 }, `Momentum for ${artists.join(", ")}`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
       // One entry per entity; points arrive newest first and are capped by `limit`.
@@ -217,8 +236,8 @@ export const TOOLS = [
     validate: (i) => str(i.artist, 80),
     async run(s, { artist }) {
       const [demo, tags] = await Promise.all([
-        s.qloo("qloo_audience_demographics", { entity: s.idFor(artist), entity_type: "artist" }, `Audience skew for ${artist}`),
-        s.qloo("qloo_entity_tags", { entities: [s.idFor(artist)], entity_type: "artist", limit: 20 }, `Taste tags for ${artist}`),
+        s.qloo("qloo_audience_demographics", { entity: s.idFor(artist), entity_type: s.act.type }, `Audience skew for ${artist}`),
+        s.qloo("qloo_entity_tags", { entities: [s.idFor(artist)], entity_type: s.act.type, limit: 20 }, `Taste tags for ${artist}`),
       ]);
       // Tags span every domain; venue amenities (credit cards, dishes, hotel stars) say nothing about the audience.
       const tasteTags = (tags.env.results ?? [])
@@ -314,9 +333,17 @@ export const TOOLS = [
       const top = s.mainSearch?.cities?.[0];
       const stopsAt = (st) => s.cities.get(st.city) ?? findCity(st.city);
       const missingTop = top && !plan.stops.some((st) => { const c = stopsAt(st); return c && distanceKm(c, top) <= 40; }) ? top : null;
+      // Two stops this close split one audience (and usually break a venue's radius clause).
+      const located = plan.stops.map((st) => ({ city: st.city, at: stopsAt(st) })).filter((x) => x.at);
+      const crowded = [];
+      located.forEach((a, i) => located.slice(i + 1).forEach((b) => {
+        const km = Math.round(distanceKm(a.at, b.at));
+        if (km < 100) crowded.push(`${a.city} and ${b.city} (${km} km)`);
+      }));
       s.submitTries = (s.submitTries ?? 0) + 1;
-      if ((oversized.length || missingTop) && s.submitTries === 1) {
+      if ((oversized.length || missingTop || crowded.length) && s.submitTries === 1) {
         const fixes = [];
+        if (crowded.length) fixes.push(`Stops under 100 km apart: ${crowded.join(", ")}. Keep the higher-ranked one, replace the other with the next-ranked metro outside the cluster, and run plan_route again, unless the user's notes asked for both.`);
         if (missingTop) fixes.push(`Add ${missingTop.city} (#1 in ${s.mainSearch.within}): replace the lowest-ranked stop, run plan_route again, and keep the 150 km spacing. Skip it only if the user's notes rule it out, and then say so in caveats.`);
         if (oversized.length) fixes.push(`Openers bigger than the headliner (${oversized.join(", ")}): replace them with a ranking pick from any city (one act can support several stops), or leave the opener empty and say why in caveats.`);
         return { status: "error", error: "PLAN_NEEDS_CHANGES", recovery: `${fixes.join(" ")} Then submit again.` };
@@ -328,6 +355,7 @@ export const TOOLS = [
         : [...plan.caveats];
       if (oversized.length) caveats.push(`Qloo rates ${oversized.join(", ")} as more popular than ${s.headliner.name}; treat as a stretch booking.`);
       if (missingTop) caveats.push(`${missingTop.city} is the #1 fan metro in ${s.mainSearch.within} but is not on this route.`);
+      if (crowded.length) caveats.push(`Some stops are under 100 km apart and may share one audience: ${crowded.join(", ")}.`);
       s.plan = {
         ...plan,
         caveats,

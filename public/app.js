@@ -306,6 +306,9 @@ async function scout(payload) {
 // ---------- boot ----------
 const form = $("#scout");
 form.stops.addEventListener("input", () => { $("#stops-out").textContent = form.stops.value; });
+const PLACEHOLDERS = { musician: "e.g. Lomelda", comedian: "e.g. Taylor Tomlinson" };
+const syncAct = () => { form.artist.placeholder = PLACEHOLDERS[form.act.value] ?? PLACEHOLDERS.musician; };
+for (const r of form.querySelectorAll('input[name="act"]')) r.addEventListener("change", syncAct);
 form.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const btn = $("#go");
@@ -336,8 +339,9 @@ $("#copy").addEventListener("click", async () => {
 
 const params = new URLSearchParams(location.search);
 if (params.get("artist")) {
-  for (const k of ["artist", "within", "stops", "notes"]) if (params.has(k)) form[k].value = params.get(k);
+  for (const k of ["act", "artist", "within", "stops", "notes"]) if (params.has(k)) form[k].value = params.get(k);
   $("#stops-out").textContent = form.stops.value;
+  syncAct();
   form.requestSubmit();
 }
 

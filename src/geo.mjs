@@ -20,18 +20,17 @@ export function distanceKm(a, b) {
   return 2 * EARTH_KM * Math.asin(Math.sqrt(h));
 }
 
-// Heatmap cells often sit in suburbs, so snap to the biggest city within metro range
-// (Glendale -> Phoenix), falling back to the nearest city further out.
-export function nearestCity(point, metroKm = 40, maxKm = 75) {
-  let metro = null;
-  let nearest = null;
+// Cities within `km` of a point, with their distance. The latitude check skips most of
+// the list cheaply.
+function citiesWithin(point, km) {
+  const out = [];
+  const dLat = km / 111;
   for (const c of CITIES) {
+    if (Math.abs(c.lat - point.lat) > dLat) continue;
     const d = distanceKm(point, c);
-    if (d > maxKm) continue;
-    if (d <= metroKm && (!metro || c.population > metro.population)) metro = { ...c, distance_km: Math.round(d) };
-    if (!nearest || d < nearest.distance_km) nearest = { ...c, distance_km: Math.round(d) };
+    if (d <= km) out.push({ c, d });
   }
-  return metro ?? nearest;
+  return out;
 }
 
 export function findCity(name) {
@@ -51,25 +50,47 @@ export const cityLabel = (c) => [c.name, c.region || c.country].filter(Boolean).
 // Heatmap cells -> one row per city with the mean affinity of the cells around it.
 // A full heatmap has thousands of cells and single-cell maxima saturate near 1.0, so
 // the mean over the metro is what separates cities; cells far from any city and metros
-// with too few cells to average are dropped.
+// with too few cells to average are dropped. Cells sit in suburbs, so each one goes to
+// the biggest city within 40 km (Glendale -> Phoenix); a sparse heatmap falls back to
+// the nearest city within 75 km.
 export function citiesFromHeatmap(points) {
   const dense = points.length > 200;
   const minCells = dense ? 3 : 1;
-  const byCity = new Map();
+  const cells = [];
   for (const p of points) {
     const lat = p?.location?.latitude ?? p?.latitude;
     const lon = p?.location?.longitude ?? p?.longitude;
     const affinity = p?.query?.affinity;
     if (typeof lat !== "number" || typeof lon !== "number" || typeof affinity !== "number") continue;
-    const city = dense ? nearestCity({ lat, lon }, 40, 40) : nearestCity({ lat, lon });
-    if (!city) continue;
+    cells.push({ affinity, near: citiesWithin({ lat, lon }, dense ? 40 : 75) });
+  }
+
+  // A region's heatmap almost always lies in one country. Keep every cell on that
+  // country's side, or a San Diego cell is filed under Tijuana, which is bigger.
+  const closest = (near) => near.reduce((a, b) => (!a || b.d < a.d ? b : a), null);
+  const tally = new Map();
+  for (const cell of cells) {
+    const c = closest(cell.near)?.c;
+    if (c) tally.set(c.country, (tally.get(c.country) ?? 0) + 1);
+  }
+  const total = [...tally.values()].reduce((a, b) => a + b, 0);
+  const [lead, leadCount] = [...tally].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
+  const country = total && leadCount / total >= 0.9 ? lead : null;
+
+  const byCity = new Map();
+  for (const cell of cells) {
+    const near = country ? cell.near.filter((x) => x.c.country === country) : cell.near;
+    const metro = near.filter((x) => x.d <= 40);
+    const pick = metro.length ? metro.reduce((a, b) => (b.c.population > a.c.population ? b : a)) : closest(near);
+    if (!pick) continue;
+    const city = pick.c;
     const key = `${city.name}|${city.region}|${city.country}`;
     const row = byCity.get(key) ?? {
       city: cityLabel(city), country: city.country, lat: city.lat, lon: city.lon,
       population: city.population, sum: 0, points: 0,
     };
     row.points += 1;
-    row.sum += affinity;
+    row.sum += cell.affinity;
     byCity.set(key, row);
   }
   return [...byCity.values()]
