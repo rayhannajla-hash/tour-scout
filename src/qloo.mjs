@@ -72,10 +72,45 @@ async function fullHeatmap({ entity_id, within }) {
     results, result_count: results.length, provenance: { requests: [request] } };
 }
 
-// Every call returns the harness envelope: { status, summary, results, result_count, error?, provenance? }.
-export async function callQloo(tool, args) {
-  if (qlooMode === "sample") return mockQloo(tool, args);
+// The hackathon key answers bursts with 429, and the agent fans out one rank call per
+// city, so live calls queue for one of two slots and rate-limited calls retry after a pause.
+const MAX_IN_FLIGHT = 2;
+const RETRY_DELAYS_MS = [3000, 8000];
+let inFlight = 0;
+const waiting = [];
+
+async function acquire() {
+  if (inFlight < MAX_IN_FLIGHT) { inFlight += 1; return; }
+  await new Promise((resolve) => waiting.push(resolve)); // slot handed over by release()
+}
+
+function release() {
+  const next = waiting.shift();
+  if (next) next();
+  else inFlight -= 1;
+}
+
+const rateLimited = (env) => env.status === "error" && ["QLOO_RATE_LIMIT", "HTTP_429"].includes(env.error?.code);
+
+async function liveCall(tool, args) {
   if (tool === "qloo_heatmap") return fullHeatmap(args);
   const client = await liveClient();
   return parseEnvelope(await client.callTool({ name: tool, arguments: args }));
+}
+
+// Every call returns the harness envelope: { status, summary, results, result_count, error?, provenance? }.
+export async function callQloo(tool, args) {
+  if (qlooMode === "sample") return mockQloo(tool, args);
+  await acquire();
+  try {
+    let env = await liveCall(tool, args);
+    for (const delay of RETRY_DELAYS_MS) {
+      if (!rateLimited(env)) break;
+      await new Promise((r) => setTimeout(r, delay));
+      env = await liveCall(tool, args);
+    }
+    return env;
+  } finally {
+    release();
+  }
 }

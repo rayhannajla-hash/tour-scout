@@ -100,7 +100,7 @@ export const TOOLS = [
       s.emit("cities", { within, cities, evidence: ref });
       return {
         evidence: ref,
-        note: "affinity is query-relative (0-1), averaged over the Qloo heatmap cells around each city: how much more that metro over-indexes for the artist than average. It is not a ticket-sales forecast.",
+        note: "affinity is query-relative (0-1), averaged over the Qloo heatmap cells around each city: how much more that metro over-indexes for the artist than the rest of the searched region. Scores from searches of different regions are not comparable, so compare cities using one search. It is not a ticket-sales forecast.",
         cities: cities.map((c) => ({ city: c.city, affinity: round(c.affinity), heatmap_cells: c.points, population: c.population })),
       };
     },
