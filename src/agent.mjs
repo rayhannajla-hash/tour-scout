@@ -23,9 +23,9 @@ const SYSTEM = `You are Tour Scout, a tour-routing agent for independent musicia
 Your edge over a generic assistant is Qloo's taste graph: real, aggregate evidence about where an artist's audience over-indexes, which acts share that audience, and whether interest is rising. Build every recommendation from that evidence.
 
 How to work:
-- Resolve the artist first. Then find fan cities in the requested region; if the region is large or the results cluster tightly, search a second region or a state to get geographic spread.
-- Choose stops that balance audience affinity against routing: avoid two stops within roughly 150 km of each other unless the user asks for it, and prefer a route a van can drive.
-- Get opener candidates once, then rank them per city so each stop gets the opener its local audience is most likely to share. Prefer openers smaller than the headliner.
+- Resolve the artist first, then search the requested region for fan cities. That search is the main ranking: build the route from its top-ranked metros and always include #1 unless the user's notes rule it out (a plan without it is sent back). A smaller top-ranked metro beats a bigger lower-ranked one: discovering those markets is the point. Search a smaller region only to fill a gap in the route, and never compare its ranks or scores with the main search.
+- Choose stops that balance audience rank against routing: avoid two stops within roughly 150 km of each other unless the user asks for it, and prefer a route a van can drive. When the top metros cluster, take the strongest one in the cluster and move on to the next-ranked metro outside it.
+- Get opener candidates once, then rank them per city so each stop gets the opener its local audience is most likely to share. Never book an opener bigger than the headliner: use the ranking's pick. The same opener on several stops is normal for a support slot.
 - Check momentum for the headliner and the openers you pick, and take an audience snapshot for the marketing angle.
 - Calls that do not depend on each other (ranking openers for every stop, momentum, the audience snapshot) go out together in one turn.
 - Decide the stops yourself from the fan-city evidence, then call plan_route once (a second time only if you change the stop list), then call submit_tour_plan exactly once.
@@ -206,16 +206,16 @@ async function scriptedRun(req, s) {
   const sample = s.evidence.some((e) => e.sample);
   await step("submit_tour_plan", {
     title: `${req.artist}: ${route.route.length}-stop run through ${req.within}`,
-    summary: `Stops are the ${req.within} cities where ${req.artist}'s audience over-indexes most, spaced at least 150 km apart and ordered into a ${route.total_km} km drive. Each stop pairs the opener Qloo ranks highest for that city's audience.`,
+    summary: `Stops are the ${req.within} cities where ${req.artist}'s audience over-indexes most, spaced at least 150 km apart and ordered into a ${route.total_km} km drive. Each stop pairs the highest-ranked opener for that city's audience that is not bigger than ${req.artist}.`,
     stops: route.route.map((city) => {
       const r = perCity.get(city);
-      const top = r?.ranking?.[0];
+      const top = r?.pick ?? null;
       const c = s.cities.get(city);
       return {
         city,
         why: `Affinity ${typeof c?.affinity === "number" ? c.affinity.toFixed(3) : "n/a"} for ${req.artist} in this market.`,
-        opener: top?.name,
-        opener_reason: top ? "Highest-ranked shared-audience act for this city." : undefined,
+        opener: top ?? undefined,
+        opener_reason: top ? "Highest-ranked shared-audience act for this city that is not bigger than the headliner." : undefined,
         evidence: [fanRef, r?.evidence].filter(Boolean),
       };
     }),
@@ -231,6 +231,7 @@ async function scriptedRun(req, s) {
 
 export async function runAgent(req, emit) {
   const s = new Session(emit);
+  s.region = req.within;
   emit("start", { mode: agentMode, model: MODEL });
   const loop = { gemini: geminiLoop, claude: claudeLoop }[agentMode] ?? scriptedRun;
   const usage = await loop(req, s);

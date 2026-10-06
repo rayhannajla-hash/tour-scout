@@ -181,7 +181,7 @@ const bar = (v) => el("span", { class: "bar", "aria-hidden": "true" }, el("span"
 function compareCity(s, topN) {
   const sc = s.score ?? {};
   const label = sc.rank === null || sc.rank === undefined
-    ? (sc.matched ? "no fan signal" : "city not found")
+    ? (sc.matched ? "no fan signal" : "outside city list")
     : `#${sc.rank}`;
   const cls = sc.rank == null ? "miss" : sc.rank <= topN ? "top" : "";
   return el("li", { class: "cmp-row" },
@@ -195,7 +195,9 @@ function renderCompare(r) {
   const stat = (cls, who, side) => el("div", { class: `cmp-stat ${cls}` },
     el("div", { class: "who" }, who),
     el("div", { class: "big" }, `${side.in_top}/${side.stops.length}`),
-    el("div", { class: "lbl" }, `stops in Qloo's top ${r.top_n} fan metros · median rank #${side.median_rank} of ${r.ranked_metros}`));
+    el("div", { class: "lbl" }, `stops in Qloo's top ${r.top_n} fan metros · median rank `
+      + (side.median_rank === null ? "n/a" : `#${side.median_rank} of ${r.ranked_metros}`)
+      + (side.unplaced ? ` · ${side.unplaced} town${side.unplaced > 1 ? "s" : ""} under 100k not scored` : "")));
   const opener = (o) => el("li", { class: "cmp-row" },
     el("span", {}, o.name,
       ...o.from.map((f) => el("span", { class: "chip" }, f === "llm" ? "LLM" : "Tour Scout")),
@@ -217,7 +219,7 @@ function renderCompare(r) {
       el("ol", { class: "cmp-list" }, r.openers.map(opener))),
     el("details", {},
       el("summary", {}, "How this was scored"),
-      el("p", {}, `Generic answer from ${r.model}, same request, no tools. Rank = position of the stop's metro among ${r.ranked_metros} metros in ${r.artist}'s Qloo heatmap for ${r.within} (${r.heatmap_cells} cells, mean affinity per metro). Opener scores come from one Qloo rank call over every opener with the headliner as the signal, so they are comparable. ${calls} Qloo calls in total.`),
+      el("p", {}, `Generic answer from ${r.model}, same request, no tools. Rank = position of the stop's metro among ${r.ranked_metros} metros in ${r.artist}'s Qloo heatmap for ${r.within} (${r.heatmap_cells} cells, mean affinity per metro); towns under 100k people are outside the city list and are not scored. Opener scores come from one Qloo rank call over every opener with the headliner as the signal, so they are comparable. ${calls} Qloo calls in total.`),
       el("p", {}, `Prompt: “${r.prompt}”`),
       r.cached_at ? el("p", {}, `Cached result from ${new Date(r.cached_at).toLocaleString()}.`) : null),
   ].filter(Boolean));

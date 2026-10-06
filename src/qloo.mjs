@@ -91,6 +91,8 @@ function release() {
 }
 
 const rateLimited = (env) => env.status === "error" && ["QLOO_RATE_LIMIT", "HTTP_429"].includes(env.error?.code);
+// A country-wide heatmap occasionally comes back with zero cells and is full on the next try.
+const retryable = (tool, env) => rateLimited(env) || (tool === "qloo_heatmap" && env.status === "empty");
 
 async function liveCall(tool, args) {
   if (tool === "qloo_heatmap") return fullHeatmap(args);
@@ -105,7 +107,7 @@ export async function callQloo(tool, args) {
   try {
     let env = await liveCall(tool, args);
     for (const delay of RETRY_DELAYS_MS) {
-      if (!rateLimited(env)) break;
+      if (!retryable(tool, env)) break;
       await new Promise((r) => setTimeout(r, delay));
       env = await liveCall(tool, args);
     }

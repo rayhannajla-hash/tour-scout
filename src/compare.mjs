@@ -120,13 +120,15 @@ export async function compareWithGenericLlm({ artist, within, stops, notes, scou
 
   const score = (list) => {
     const placed = list.map((s) => placeCity(s.city, ranking));
-    // A city with no measurable fan metro counts as ranked last.
-    const ranks = placed.map((p) => p.rank ?? ranking.length + 1).sort((a, b) => a - b);
+    // A known city with no measurable fan metro counts as ranked last; a city outside the
+    // city list (towns under 100k) cannot be placed at all, so it stays out of the median.
+    const ranks = placed.filter((p) => p.matched).map((p) => p.rank ?? ranking.length + 1).sort((a, b) => a - b);
     const mid = Math.floor(ranks.length / 2);
-    const median = ranks.length % 2 ? ranks[mid] : Math.round((ranks[mid - 1] + ranks[mid]) / 2);
+    const median = !ranks.length ? null : ranks.length % 2 ? ranks[mid] : Math.round((ranks[mid - 1] + ranks[mid]) / 2);
     const picked = new Set(placed.map((p) => p.rank).filter((r) => r !== null));
     const missed = ranking.slice(0, 10).map((r, i) => ({ city: r.city, rank: i + 1 })).filter((m) => !picked.has(m.rank));
-    return { placed, inTop: placed.filter((p) => p.rank !== null && p.rank <= topN).length, median, missed };
+    return { placed, inTop: placed.filter((p) => p.rank !== null && p.rank <= topN).length, median, missed,
+      unplaced: placed.filter((p) => !p.matched).length };
   };
   const llm = score(baseline.stops);
   const ours = score(scout);
@@ -139,8 +141,8 @@ export async function compareWithGenericLlm({ artist, within, stops, notes, scou
     ranked_metros: ranking.length,
     heatmap_cells: heat.result_count,
     top_n: topN,
-    llm: { in_top: llm.inTop, median_rank: llm.median, missed_top10: llm.missed, stops: baseline.stops.map((s, i) => ({ ...s, score: llm.placed[i] })) },
-    scout: { in_top: ours.inTop, median_rank: ours.median, missed_top10: ours.missed, stops: scout.map((s, i) => ({ ...s, score: ours.placed[i] })) },
+    llm: { in_top: llm.inTop, median_rank: llm.median, unplaced: llm.unplaced, missed_top10: llm.missed, stops: baseline.stops.map((s, i) => ({ ...s, score: llm.placed[i] })) },
+    scout: { in_top: ours.inTop, median_rank: ours.median, unplaced: ours.unplaced, missed_top10: ours.missed, stops: scout.map((s, i) => ({ ...s, score: ours.placed[i] })) },
     openers: openers.map((o) => ({
       name: o.name,
       from: [...o.from],

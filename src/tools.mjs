@@ -1,7 +1,7 @@
 // High-level tools the agent plans with. Each wraps one or two Qloo workflows and
 // records every Qloo call as numbered evidence (E1, E2, ...) the final plan must cite.
 import { callQloo } from "./qloo.mjs";
-import { citiesFromHeatmap, findCity, cityLabel, orderRoute, routeLegs } from "./geo.mjs";
+import { citiesFromHeatmap, findCity, cityLabel, orderRoute, routeLegs, distanceKm } from "./geo.mjs";
 
 const nameOf = (r) => r?.name ?? r?.entity?.name ?? r?.properties?.name ?? null;
 const idOf = (r) => r?.entity_id ?? r?.id ?? r?.entity?.entity_id ?? null;
@@ -14,8 +14,11 @@ export class Session {
     this.evidence = [];
     this.cities = new Map(); // label -> city row from find_fan_cities
     this.ids = new Map(); // lower-cased artist name -> Qloo entity UUID
+    this.popularity = new Map(); // lower-cased artist name -> Qloo popularity percentile
     this.headliner = null;
     this.plan = null;
+    this.region = null; // the region the user asked for; its fan-city search is the main ranking
+    this.mainSearch = null; // { within, cities } ranked best first
   }
 
   // Names like "Big Thief" can match both an artist and a person in Qloo; once an
@@ -95,13 +98,16 @@ export const TOOLS = [
         { entity_id: s.idFor(artist), within }, `Where ${artist}'s audience over-indexes in ${within}`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
-      const cities = citiesFromHeatmap(env.results ?? []).slice(0, 12);
-      for (const c of cities) s.cities.set(c.city, c);
+      const cities = citiesFromHeatmap(env.results ?? []).slice(0, 15).map((c, i) => ({ ...c, rank: i + 1 }));
+      for (const c of cities) if (!s.cities.has(c.city)) s.cities.set(c.city, c);
+      const isMain = !s.mainSearch || (s.region && within.toLowerCase() === s.region.toLowerCase() && s.mainSearch.within.toLowerCase() !== s.region.toLowerCase());
+      if (isMain) s.mainSearch = { within, cities, ref };
       s.emit("cities", { within, cities, evidence: ref });
       return {
         evidence: ref,
-        note: "affinity is query-relative (0-1), averaged over the Qloo heatmap cells around each city: how much more that metro over-indexes for the artist than the rest of the searched region. Scores from searches of different regions are not comparable, so compare cities using one search. It is not a ticket-sales forecast.",
-        cities: cities.map((c) => ({ city: c.city, affinity: round(c.affinity), heatmap_cells: c.points, population: c.population })),
+        main_search: s.mainSearch.within === within,
+        note: "Cities are ranked by affinity: query-relative (0-1), averaged over the Qloo heatmap cells around each city, i.e. how much more that metro over-indexes for the artist than the rest of the searched region. Ranks and scores from searches of different regions are not comparable. It is not a ticket-sales forecast.",
+        cities: cities.map((c) => ({ rank: c.rank, city: c.city, affinity: round(c.affinity), heatmap_cells: c.points, population: c.population })),
       };
     },
   },
@@ -120,7 +126,10 @@ export const TOOLS = [
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
       const hp = s.headliner?.popularity;
-      for (const r of env.results ?? []) s.remember(nameOf(r), idOf(r));
+      for (const r of env.results ?? []) {
+        s.remember(nameOf(r), idOf(r));
+        if (nameOf(r) && typeof r.popularity === "number") s.popularity.set(nameOf(r).toLowerCase(), r.popularity);
+      }
       const candidates = (env.results ?? []).map((r) => ({
         name: nameOf(r), affinity: round(affinityOf(r)), popularity: round(r?.popularity),
         smaller_than_headliner: typeof hp === "number" && typeof r?.popularity === "number" ? r.popularity < hp : null,
@@ -146,7 +155,19 @@ export const TOOLS = [
         { options: candidates.map((c) => s.idFor(c)), option_type: "artist", signals: [s.idFor(headliner)], signal_location: city }, `Best opener for ${headliner} in ${city}`);
       const problem = qlooProblem(env, ref);
       if (problem) return problem;
-      return { evidence: ref, city, ranking: (env.results ?? []).map((r) => ({ name: nameOf(r), affinity: round(affinityOf(r)) })) };
+      const hp = s.headliner?.popularity;
+      for (const r of env.results ?? []) {
+        if (nameOf(r) && typeof r.popularity === "number") s.popularity.set(nameOf(r).toLowerCase(), r.popularity);
+      }
+      const ranking = (env.results ?? []).map((r) => ({
+        name: nameOf(r), affinity: round(affinityOf(r)),
+        bigger_than_headliner: typeof hp === "number" && typeof r?.popularity === "number" ? r.popularity > hp : null,
+      }));
+      // An opener bigger than the headliner is not a realistic booking, however well it ranks.
+      const pick = ranking.find((r) => r.bigger_than_headliner === false) ?? null;
+      return { evidence: ref, city, ranking, pick: pick?.name ?? null,
+        note: pick ? "pick = highest-ranked act that is not bigger than the headliner. Use it unless the user asked otherwise."
+          : "Every ranked act is bigger than the headliner or of unknown size; say so in caveats." };
     },
   },
   {
@@ -240,7 +261,15 @@ export const TOOLS = [
       const legs = routeLegs(route);
       s.route = route;
       s.emit("route", { route, legs });
-      return { route: route.map((c) => c.city), legs, total_km: legs.reduce((a, l) => a + l.km, 0) };
+      const result = { route: route.map((c) => c.city), legs, total_km: legs.reduce((a, l) => a + l.km, 0) };
+      // The strongest metros of the main search should anchor the route; flag any left out.
+      const left = (s.mainSearch?.cities ?? []).slice(0, 3)
+        .filter((top) => !route.some((c) => distanceKm(c, top) <= 40));
+      if (left.length) {
+        result.note = `Not on this route: ${left.map((c) => `${c.city} (#${c.rank} in ${s.mainSearch.within})`).join(", ")}. `
+          + "Add them unless the user's notes rule them out; otherwise say in caveats why the route skips them.";
+      }
+      return result;
     },
   },
   {
@@ -276,11 +305,29 @@ export const TOOLS = [
       const known = new Set(s.evidence.map((e) => e.id));
       const bad = plan.stops.flatMap((st) => st.evidence.filter((e) => !known.has(e)));
       if (bad.length) return { status: "error", unknown_evidence: bad, recovery: "Cite only evidence IDs returned by earlier tools." };
+      const hp = s.headliner?.popularity;
+      const oversized = typeof hp === "number"
+        ? [...new Set(plan.stops.map((st) => st.opener).filter((o) => o && (s.popularity.get(o.toLowerCase()) ?? 0) > hp))]
+        : [];
+      // The main search's #1 metro is the strongest single piece of evidence; a plan without it
+      // has to be sent back once (the user's notes may still rule it out on the second try).
+      const top = s.mainSearch?.cities?.[0];
+      const stopsAt = (st) => s.cities.get(st.city) ?? findCity(st.city);
+      const missingTop = top && !plan.stops.some((st) => { const c = stopsAt(st); return c && distanceKm(c, top) <= 40; }) ? top : null;
+      s.submitTries = (s.submitTries ?? 0) + 1;
+      if ((oversized.length || missingTop) && s.submitTries === 1) {
+        const fixes = [];
+        if (missingTop) fixes.push(`Add ${missingTop.city} (#1 in ${s.mainSearch.within}): replace the lowest-ranked stop, run plan_route again, and keep the 150 km spacing. Skip it only if the user's notes rule it out, and then say so in caveats.`);
+        if (oversized.length) fixes.push(`Openers bigger than the headliner (${oversized.join(", ")}): replace them with a ranking pick from any city (one act can support several stops), or leave the opener empty and say why in caveats.`);
+        return { status: "error", error: "PLAN_NEEDS_CHANGES", recovery: `${fixes.join(" ")} Then submit again.` };
+      }
       const coords = new Map((s.route ?? []).map((c) => [c.city, c]));
       // The sample-data warning is the app's job, not the model's: always first, always exact.
       const caveats = s.evidence.some((e) => e.sample)
         ? ["This plan used SAMPLE DATA generated locally, not live Qloo results.", ...plan.caveats.filter((c) => !/sample/i.test(c))]
-        : plan.caveats;
+        : [...plan.caveats];
+      if (oversized.length) caveats.push(`Qloo rates ${oversized.join(", ")} as more popular than ${s.headliner.name}; treat as a stretch booking.`);
+      if (missingTop) caveats.push(`${missingTop.city} is the #1 fan metro in ${s.mainSearch.within} but is not on this route.`);
       s.plan = {
         ...plan,
         caveats,
