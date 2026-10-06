@@ -17,7 +17,9 @@ const BASELINE_SCHEMA = {
         properties: {
           city: { type: "string", description: "City and full state or country name, e.g. 'Austin, Texas'." },
           why: { type: "string", description: "One sentence." },
-          opener: { type: "string", description: "One opener for this stop." },
+          // Without "name only", comedian runs came back as MC intros ("Please welcome to the
+          // stage, ... Nate Craig!"), which can't be looked up in Qloo and read as rigged.
+          opener: { type: "string", description: "The opener's name only, exactly as the act is billed, e.g. 'Jane Doe'. No other words." },
         },
         required: ["city", "why", "opener"],
       },
