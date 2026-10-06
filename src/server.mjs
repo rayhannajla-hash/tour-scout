@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { runAgent, agentMode, MODEL } from "./agent.mjs";
+import { compareWithGenericLlm } from "./compare.mjs";
 import { qlooMode } from "./qloo.mjs";
 import { CITY_SOURCE } from "./geo.mjs";
 
@@ -19,6 +20,7 @@ const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; ch
 
 const runsByIp = new Map(); // ip -> timestamps
 const cache = new Map(); // request key -> { at, events }
+const compareCache = new Map(); // request key -> { at, result }
 let running = 0;
 
 function clientIp(req) {
@@ -110,6 +112,43 @@ async function handlePlan(req, res) {
   }
 }
 
+function parseCompareRequest(body) {
+  const base = parsePlanRequest(body);
+  const j = JSON.parse(body);
+  const clean = (v) => (typeof v === "string" ? v.replace(/\s+/g, " ").trim().slice(0, 80) : "");
+  const scout = (Array.isArray(j.scout) ? j.scout : []).slice(0, 8)
+    .map((s) => ({ city: clean(s?.city), opener: clean(s?.opener) || null }))
+    .filter((s) => s.city);
+  if (!scout.length) throw new Error("scout stops are required");
+  return { ...base, scout };
+}
+
+async function handleCompare(req, res) {
+  if (agentMode !== "gemini") return json(res, 501, { error: "The comparison needs the Gemini model configured on the server." });
+  let body;
+  try {
+    body = parseCompareRequest(await readBody(req));
+  } catch (err) {
+    return json(res, 400, { error: String(err.message) });
+  }
+  const key = JSON.stringify([body.artist.toLowerCase(), body.within.toLowerCase(), body.stops, body.scout]);
+  const hit = compareCache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) return json(res, 200, { ...hit.result, cached_at: new Date(hit.at).toISOString() });
+  if (running >= MAX_CONCURRENT) return json(res, 503, { error: "Tour Scout is busy. Try again in a minute." });
+  if (!allowRun(clientIp(req))) return json(res, 429, { error: `Demo limit reached (${RUNS_PER_HOUR} runs per hour).` });
+  running += 1;
+  try {
+    const result = await compareWithGenericLlm(body);
+    compareCache.set(key, { at: Date.now(), result });
+    json(res, 200, result);
+  } catch (err) {
+    console.error("compare failed:", err);
+    json(res, 502, { error: String(err?.message ?? err).slice(0, 300) });
+  } finally {
+    running -= 1;
+  }
+}
+
 async function serveStatic(req, res) {
   const url = new URL(req.url, "http://x");
   const rel = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
@@ -126,6 +165,7 @@ async function serveStatic(req, res) {
 
 const server = http.createServer((req, res) => {
   if (req.method === "POST" && req.url === "/api/plan") return handlePlan(req, res);
+  if (req.method === "POST" && req.url === "/api/compare") return handleCompare(req, res);
   if (req.method === "GET" && req.url === "/api/health") {
     return json(res, 200, { qloo: qlooMode, agent: agentMode, model: MODEL, cities: CITY_SOURCE });
   }

@@ -69,8 +69,10 @@ function drawRoute(route) {
 // ---------- state + rendering ----------
 let state;
 function reset() {
-  state = { steps: new Map(), evidence: [], trends: [], legs: [], plan: null };
+  state = { steps: new Map(), evidence: [], trends: [], legs: [], plan: null, request: null };
   $("#steps").replaceChildren();
+  $("#compare-out").replaceChildren();
+  $("#compare-go").disabled = false;
   $("#evidence").replaceChildren();
   $("#ev-count").textContent = "";
   $("#plan").hidden = true;
@@ -172,6 +174,77 @@ function renderPlan(plan) {
   if (plan.stops.every((s) => s.lat !== null)) drawRoute(plan.stops.map((s) => ({ city: s.city, lat: s.lat, lon: s.lon })));
 }
 
+// ---------- versus a generic LLM ----------
+const pct = (v) => `${Math.round(Math.max(0, Math.min(1, v ?? 0)) * 100)}%`;
+const bar = (v) => el("span", { class: "bar", "aria-hidden": "true" }, el("span", { style: `width:${pct(v)}` }));
+
+function compareCity(s, topN) {
+  const sc = s.score ?? {};
+  const label = sc.rank === null || sc.rank === undefined
+    ? (sc.matched ? "no fan signal" : "city not found")
+    : `#${sc.rank}`;
+  const cls = sc.rank == null ? "miss" : sc.rank <= topN ? "top" : "";
+  return el("li", { class: "cmp-row" },
+    el("span", {}, s.city),
+    el("span", { class: `rank ${cls}`, title: sc.metro ? `Qloo metro: ${sc.metro} · affinity ${sc.affinity.toFixed(3)}` : null }, label),
+    bar(sc.affinity),
+    s.why ? el("span", { class: "cmp-why" }, s.why) : null);
+}
+
+function renderCompare(r) {
+  const stat = (cls, who, side) => el("div", { class: `cmp-stat ${cls}` },
+    el("div", { class: "who" }, who),
+    el("div", { class: "big" }, `${side.in_top}/${side.stops.length}`),
+    el("div", { class: "lbl" }, `stops in Qloo's top ${r.top_n} fan metros · median rank #${side.median_rank} of ${r.ranked_metros}`));
+  const opener = (o) => el("li", { class: "cmp-row" },
+    el("span", {}, o.name,
+      ...o.from.map((f) => el("span", { class: "chip" }, f === "llm" ? "LLM" : "Tour Scout")),
+      o.bigger_than_headliner ? el("span", { class: "ev-tag" }, "bigger than headliner") : null),
+    el("span", { class: `rank ${o.affinity === null ? "miss" : ""}` },
+      o.affinity === null ? (o.resolved ? "no overlap signal" : "not in Qloo") : o.affinity.toFixed(3)),
+    bar(o.affinity));
+  const missed = (side) => el("p", { class: "cmp-why" }, "Qloo top-10 metros not on this route: ",
+    side.missed_top10.length ? side.missed_top10.map((m) => `${m.city.split(",")[0]} (#${m.rank})`).join(", ") : "none");
+  const calls = r.qloo_calls.length;
+  $("#compare-out").replaceChildren(...[
+    r.sample ? el("p", { class: "hint" }, "Scored against SAMPLE DATA, not live Qloo results.") : null,
+    el("div", { class: "cmp-stats" }, stat("", "Generic LLM, no Qloo", r.llm), stat("ours", "Tour Scout", r.scout)),
+    el("div", { class: "grid2" },
+      el("div", {}, el("h3", {}, "Generic LLM stops"), el("ol", { class: "cmp-list" }, r.llm.stops.map((s) => compareCity(s, r.top_n))), missed(r.llm)),
+      el("div", {}, el("h3", {}, "Tour Scout stops"), el("ol", { class: "cmp-list" }, r.scout.stops.map((s) => compareCity(s, r.top_n))), missed(r.scout))),
+    el("div", {},
+      el("h3", {}, "Openers: audience overlap with the headliner"),
+      el("ol", { class: "cmp-list" }, r.openers.map(opener))),
+    el("details", {},
+      el("summary", {}, "How this was scored"),
+      el("p", {}, `Generic answer from ${r.model}, same request, no tools. Rank = position of the stop's metro among ${r.ranked_metros} metros in ${r.artist}'s Qloo heatmap for ${r.within} (${r.heatmap_cells} cells, mean affinity per metro). Opener scores come from one Qloo rank call over every opener with the headliner as the signal, so they are comparable. ${calls} Qloo calls in total.`),
+      el("p", {}, `Prompt: “${r.prompt}”`),
+      r.cached_at ? el("p", {}, `Cached result from ${new Date(r.cached_at).toLocaleString()}.`) : null),
+  ].filter(Boolean));
+}
+
+async function runCompare() {
+  const btn = $("#compare-go");
+  if (!state.plan || !state.request) return;
+  btn.disabled = true;
+  btn.textContent = "Comparing… about a minute";
+  $("#compare-out").replaceChildren();
+  try {
+    const res = await fetch("/api/compare", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...state.request, scout: state.plan.stops.map((s) => ({ city: s.city, opener: s.opener ?? null })) }),
+    });
+    const r = await res.json().catch(() => ({ error: res.statusText }));
+    if (!res.ok || r.error) throw new Error(r.error ?? "Comparison failed");
+    renderCompare(r);
+  } catch (err) {
+    $("#compare-out").replaceChildren(el("p", { class: "error" }, String(err.message ?? err)));
+    btn.disabled = false;
+  } finally {
+    btn.textContent = "Run comparison";
+  }
+}
+
 function planAsText() {
   const p = state.plan;
   if (!p) return "";
@@ -204,6 +277,7 @@ const handlers = {
 
 async function scout(payload) {
   reset();
+  state.request = payload;
   const res = await fetch("/api/plan", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
   if (!res.ok || !res.body) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -247,6 +321,7 @@ form.addEventListener("submit", async (ev) => {
     btn.textContent = "Scout the tour";
   }
 });
+$("#compare-go").addEventListener("click", runCompare);
 $("#copy").addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(planAsText());

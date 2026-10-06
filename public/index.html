@@ -93,6 +93,14 @@
           <h3>What this plan does not establish</h3>
           <ul id="caveats"></ul>
         </div>
+        <section class="compare" aria-labelledby="compare-h">
+          <div class="plan-head">
+            <h3 id="compare-h">Versus a generic LLM</h3>
+            <button type="button" class="ghost" id="compare-go">Run comparison</button>
+          </div>
+          <p class="hint">Sends the same request to the same model with no Qloo access, then scores both plans against this artist's Qloo heatmap for the region.</p>
+          <div id="compare-out" aria-live="polite"></div>
+        </section>
       </section>
     </section>
   </main>

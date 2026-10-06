@@ -54,12 +54,14 @@ async function executeCalls(s, calls) {
 let geminiClient = null;
 let geminiModelIdx = 0; // sticks to the first model that worked
 
-async function geminiGenerate(contents) {
+const agentConfig = () => ({
+  systemInstruction: SYSTEM,
+  tools: [{ functionDeclarations: TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.input_schema })) }],
+});
+
+// Shared with compare.mjs, which calls the same models with no tools and no Qloo.
+export async function geminiGenerate(contents, config = agentConfig()) {
   geminiClient ??= new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const config = {
-    systemInstruction: SYSTEM,
-    tools: [{ functionDeclarations: TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, parametersJsonSchema: t.input_schema })) }],
-  };
   for (let i = geminiModelIdx; i < GEMINI_MODELS.length; i++) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
