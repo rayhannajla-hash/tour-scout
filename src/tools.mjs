@@ -328,6 +328,9 @@ export const TOOLS = [
       const oversized = typeof hp === "number"
         ? [...new Set(plan.stops.map((st) => st.opener).filter((o) => o && (s.popularity.get(o.toLowerCase()) ?? 0) > hp))]
         : [];
+      // An opener has to be an act Qloo returned. Left alone, the model fills the slot with
+      // descriptions ("local Texas singer-songwriter support") when every ranked act is too big.
+      const unknownOpeners = [...new Set(plan.stops.map((st) => st.opener).filter((o) => o && !s.popularity.has(o.toLowerCase())))];
       // The main search's #1 metro is the strongest single piece of evidence; a plan without it
       // has to be sent back once (the user's notes may still rule it out on the second try).
       const top = s.mainSearch?.cities?.[0];
@@ -341,8 +344,9 @@ export const TOOLS = [
         if (km < 100) crowded.push(`${a.city} and ${b.city} (${km} km)`);
       }));
       s.submitTries = (s.submitTries ?? 0) + 1;
-      if ((oversized.length || missingTop || crowded.length) && s.submitTries === 1) {
+      if ((oversized.length || missingTop || crowded.length || unknownOpeners.length) && s.submitTries === 1) {
         const fixes = [];
+        if (unknownOpeners.length) fixes.push(`Openers that are not act names Qloo returned: ${unknownOpeners.map((o) => `"${o}"`).join(", ")}. The opener field takes one act name exactly as find_opener_candidates or a ranking returned it. Where no ranked act is smaller than the headliner, use a smaller candidate from find_opener_candidates, or leave the opener empty and say so in caveats.`);
         if (crowded.length) fixes.push(`Stops under 100 km apart: ${crowded.join(", ")}. Keep the higher-ranked one, replace the other with the next-ranked metro outside the cluster, and run plan_route again, unless the user's notes asked for both.`);
         if (missingTop) fixes.push(`Add ${missingTop.city} (#1 in ${s.mainSearch.within}): replace the lowest-ranked stop, run plan_route again, and keep the 150 km spacing. Skip it only if the user's notes rule it out, and then say so in caveats.`);
         if (oversized.length) fixes.push(`Openers bigger than the headliner (${oversized.join(", ")}): replace them with a ranking pick from any city (one act can support several stops), or leave the opener empty and say why in caveats.`);
@@ -356,10 +360,15 @@ export const TOOLS = [
       if (oversized.length) caveats.push(`Qloo rates ${oversized.join(", ")} as more popular than ${s.headliner.name}; treat as a stretch booking.`);
       if (missingTop) caveats.push(`${missingTop.city} is the #1 fan metro in ${s.mainSearch.within} but is not on this route.`);
       if (crowded.length) caveats.push(`Some stops are under 100 km apart and may share one audience: ${crowded.join(", ")}.`);
+      if (unknownOpeners.length) caveats.push(`Openers not found in Qloo's results were left out: ${unknownOpeners.join(", ")}.`);
       s.plan = {
         ...plan,
         caveats,
-        stops: plan.stops.map((st) => ({ ...st, lat: coords.get(st.city)?.lat ?? null, lon: coords.get(st.city)?.lon ?? null })),
+        stops: plan.stops.map((st) => ({
+          ...st,
+          ...(unknownOpeners.includes(st.opener) ? { opener: null, opener_reason: null } : {}),
+          lat: coords.get(st.city)?.lat ?? null, lon: coords.get(st.city)?.lon ?? null,
+        })),
       };
       s.emit("plan", s.plan);
       return { status: "accepted" };
