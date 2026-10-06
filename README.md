@@ -1,12 +1,12 @@
 # Tour Scout
 
-An agent that routes tours for independent musicians, built on Qloo's taste graph.
+An agent that routes tours for independent musicians and stand-up comedians, built on Qloo's taste graph.
 
-Give it an artist and a region. It ranks the metros where that artist's audience over-indexes, builds a drivable route from the top of that ranking, books a realistic opener (one whose fans overlap the headliner's and who is not bigger than the headliner), and hands back a plan where every stop cites the Qloo calls behind it. A comparison panel then scores the same request answered by a generic LLM against the same Qloo evidence.
+Give it an act and a region. It ranks the metros where that artist's audience over-indexes, builds a drivable route from the top of that ranking, books a realistic opener (one whose fans overlap the headliner's and who is not bigger than the headliner), and hands back a plan where every stop cites the Qloo calls behind it. A comparison panel then scores the same request answered by a generic LLM against the same Qloo evidence.
 
 ## Why Qloo is the differentiator
 
-A general-purpose model asked "where should this artist tour?" guesses from the artist's biography. Asked about Lomelda, a singer-songwriter from Texas, it routes a Texas-and-Plains run (Austin, Dallas, Norman, Kansas City, Omaha). Qloo's heatmap ranks her audience densest in Austin, then Seattle, San Francisco, Boston and New York; of 135 ranked US metros, that Kansas City is #43 and Omaha does not rank. Scored against the same heatmap, the generic plan put 2 of 5 stops in her top 20 metros (median rank #35) and Tour Scout put 5 of 5 (median #3). Tour Scout's planning is built on those signals, and the plan shows its evidence so a manager can check it.
+A general-purpose model asked "where should this artist tour?" guesses from the artist's biography. Asked about Lomelda, a singer-songwriter from Texas, it routes a Texas-and-Plains run (Austin, Dallas, Norman, Kansas City, Omaha). Qloo's heatmap ranks her audience densest in Austin, then Seattle, San Francisco, Boston and New York; of 135 ranked US metros, that Kansas City is #43 and Omaha does not rank. Scored against the same heatmap, the generic plan put 2 of 5 stops in her top 20 metros (median rank #35) and Tour Scout put 5 of 5 (median #3). For comedian Taylor Tomlinson the generic plan went through the Southeast and put 0 of 5 stops in her top 20 of 192 metros (median #116); Tour Scout put 5 of 5 (median #3). Tour Scout's planning is built on those signals, and the plan shows its evidence so a manager can check it.
 
 ## How it works
 
@@ -21,7 +21,9 @@ The agent (Gemini or Claude, via function calling) plans with eight tools. Six o
 | `check_momentum` | `qloo_trends` | Rising or cooling interest for headliner and openers |
 | `audience_snapshot` | `qloo_audience_demographics`, `qloo_entity_tags` | The marketing angle, at aggregate level only |
 | `plan_route` | none (local) | Shortest open route (nearest neighbour + 2-opt), leg distances |
-| `submit_tour_plan` | none | Structured plan; rejected if a stop cites unknown evidence, and sent back once if it skips the #1 metro or books an opener bigger than the headliner |
+| `submit_tour_plan` | none | Structured plan; rejected if a stop cites unknown evidence, and sent back once if it skips the #1 metro, books an opener bigger than the headliner, or puts two stops under 100 km apart |
+
+**Comedians.** Qloo models comedians as person entities, so for a comedian every call uses `person`, and opener candidates come from the person graph narrowed to `urn:tag:genre:person:comedian` (without it, actors and online creators come back too). An entity with no popularity score has no audience data; Tour Scout says so and stops.
 
 The heatmap is requested directly because `qloo_where_popular` keeps only the top 20 cells, which for smaller artists are sparse rural cells where a few fans saturate the score. Live Qloo calls share two slots and retry after a 429.
 
@@ -50,7 +52,7 @@ npm start              # http://localhost:8787
 
 Keys stay on the server. The browser only talks to `/api/plan`, `/api/compare` and `/api/health`. The comparison panel needs `GEMINI_API_KEY`.
 
-Shareable links prefill and run a plan: `/?artist=Lomelda&within=United%20States&stops=5`.
+Shareable links prefill and run a plan: `/?act=musician&artist=Lomelda&within=United%20States&stops=5` or `/?act=comedian&artist=Taylor%20Tomlinson&within=United%20States&stops=5`.
 
 ## Deploy
 
@@ -59,11 +61,11 @@ The `Dockerfile` runs the server as a container (the Qloo harness starts `qloo m
 ## What a plan does not establish
 
 - Affinity is relative interest in an area compared with the baseline. It is not a ticket-sales forecast, venue availability, or a guarantee of turnout.
-- Heatmap cells are averaged into metros of at least 100,000 people; smaller towns (Asheville, Lawrence) can't be stops yet, and the comparison panel doesn't score them.
+- Heatmap cells are averaged into metros of at least 100,000 people in the country most of the heatmap lies in; smaller towns (Asheville, Lawrence) can't be stops yet, and the comparison panel doesn't score them.
 - Opener scores are comparable only within one Qloo call.
 - Qloo trends were flat on the hackathon data, so momentum is reported but not relied on.
 - The generic LLM's answer varies between runs; the panel shows one run, cached for six hours.
-- Comedians resolve in Qloo as people rather than artists and aren't supported yet.
+- Comedians Qloo holds no audience data for (for example Atsuko Okatsuka) can't be planned.
 - No personal data is sent to Qloo. Audience results are aggregate and are never used to profile individuals.
 
 ## Credits
